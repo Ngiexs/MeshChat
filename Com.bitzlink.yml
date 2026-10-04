@@ -1,0 +1,30 @@
+Categories:
+  - Internet
+  - Security
+License: MIT
+AuthorName: dk
+AuthorEmail: ....gmail
+SourceCode: https://github.com/YOUR_GITHUB_USERNAME/MeshChat
+IssueTracker: https://github.com/YOUR_GITHUB_USERNAME/MeshChat/issues
+Changelog: https://github.com/YOUR_GITHUB_USERNAME/MeshChat/releases
+
+AutoName: MeshChat
+Summary: Peer-to-peer encrypted group chat over Tor
+Description: |-
+  MeshChat is a peer-to-peer encrypted group chat that runs
+  entirely over Tor. No central server, no account, and no phone
+  number required.
+
+  Messages are encrypted with AES-256-GCM and routed through the
+  Tor network. A backup node takes over automatically if the host
+  disconnects.
+RepoType: git
+Repo: https://github.com/ngiex/MeshChat.git
+
+Builds:
+  - versionName: "0.4.0-beta1"
+    versionCode: 1
+    commit: v1.0
+    subdir: app
+    gradle:
+      - yes
