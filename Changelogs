@@ -1,0 +1,10 @@
+Initial beta release.
+
+- End-to-end encrypted group chat over Tor
+- No account, no phone number, no email
+- Automatic host failover via backup nodes
+- Disappearing messages (30s, 5m, 1h, 1d)
+- Reply to specific messages
+- Delivery receipts
+- QR code sharing for joining a group
+- Multiple groups per device
