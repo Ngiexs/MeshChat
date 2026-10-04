@@ -1,0 +1,527 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:fitsSystemWindows="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="@color/surface"
+            android:gravity="center_vertical"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp">
+
+            <Button
+                android:id="@+id/menuBtn"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:minWidth="0dp"
+                android:text="☰"
+                android:textSize="20sp"
+                android:textColor="@color/text"
+                android:background="?android:attr/selectableItemBackground"/>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp">
+
+                <TextView
+                    android:id="@+id/headerGroup"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="MeshChat"
+                    android:textColor="@color/text"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:maxLines="1"
+                    android:ellipsize="end"/>
+
+                <TextView
+                    android:id="@+id/typingBar"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/accent"
+                    android:textSize="11sp"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:text=""/>
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/searchBtn"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:minWidth="0dp"
+                android:text="🔍"
+                android:textSize="16sp"
+                android:textColor="@color/text"
+                android:background="?android:attr/selectableItemBackground"/>
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/border"/>
+
+        <LinearLayout
+            android:id="@+id/searchBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="@color/surface"
+            android:padding="8dp"
+            android:gravity="center_vertical"
+            android:visibility="gone">
+
+            <EditText
+                android:id="@+id/searchInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Search messages"
+                android:textColorHint="@color/text_hint"
+                android:textColor="@color/text"
+                android:background="@drawable/bg_input"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp"
+                android:maxLines="1"
+                android:inputType="text"/>
+
+            <Button
+                android:id="@+id/searchClose"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:text="✕"
+                android:textSize="14sp"
+                android:textColor="@color/text"
+                android:background="?android:attr/selectableItemBackground"/>
+        </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/scrollView"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:paddingTop="8dp"
+            android:fillViewport="true"
+            android:background="@color/bg">
+
+            <LinearLayout
+                android:id="@+id/messagesContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"/>
+        </ScrollView>
+
+        <LinearLayout
+            android:id="@+id/replyBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="@color/surface_hi"
+            android:padding="10dp"
+            android:gravity="center_vertical"
+            android:visibility="gone">
+
+            <View
+                android:layout_width="3dp"
+                android:layout_height="34dp"
+                android:background="@color/accent"/>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:layout_marginStart="10dp">
+
+                <TextView
+                    android:id="@+id/replyWho"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/accent"
+                    android:maxLines="1"
+                    android:ellipsize="end"/>
+
+                <TextView
+                    android:id="@+id/replyPreview"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="12sp"
+                    android:textColor="@color/text_muted"
+                    android:maxLines="1"
+                    android:ellipsize="end"/>
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/replyCancel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:text="✕"
+                android:textSize="14sp"
+                android:textColor="@color/text"
+                android:background="?android:attr/selectableItemBackground"/>
+        </LinearLayout>
+
+        <!-- Input row: rounded input + circular arrow send button -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="14dp"
+            android:background="@color/surface"
+            android:gravity="bottom">
+
+            <EditText
+                android:id="@+id/msgInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Message"
+                android:textColorHint="@color/text_hint"
+                android:textColor="@color/text"
+                android:background="@drawable/bg_input"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp"
+                android:minHeight="48dp"
+                android:maxLines="4"
+                android:inputType="textMultiLine|textCapSentences"
+                android:layout_marginEnd="8dp"/>
+
+            <ImageButton
+                android:id="@+id/sendBtn"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="@drawable/bg_send_circle"
+                android:src="@drawable/ic_send_arrow"
+                android:contentDescription="Send"
+                android:scaleType="centerInside"
+                android:padding="13dp"
+                android:alpha="0"
+                android:scaleX="0.7"
+                android:scaleY="0.7"
+                android:enabled="false"/>
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/scrollBtn"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="110dp"
+        android:minWidth="0dp"
+        android:minHeight="0dp"
+        android:text="↓"
+        android:textSize="18sp"
+        android:textColor="#0A0E13"
+        android:background="@drawable/bg_send_circle"
+        android:elevation="4dp"
+        android:visibility="gone"/>
+
+    <View
+        android:id="@+id/drawerScrim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#99000000"
+        android:visibility="gone"/>
+
+    <ScrollView
+        android:id="@+id/drawerScroll"
+        android:layout_width="300dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:background="@color/surface"
+        android:visibility="gone"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:id="@+id/drawerPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingTop="36dp"
+            android:paddingBottom="28dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp">
+
+            <TextView
+                android:id="@+id/drawerGroup"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="MeshChat"
+                android:textColor="@color/text"
+                android:textSize="22sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="2dp"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Encrypted over Tor"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp"
+                android:layout_marginBottom="28dp"/>
+
+            <TextView style="@style/SectionLabel" android:text="NAME"/>
+            <TextView
+                android:id="@+id/drawerName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text"
+                android:textSize="15sp"
+                android:layout_marginBottom="4dp"/>
+
+            <TextView style="@style/SectionLabel" android:text="TYPE"/>
+            <TextView
+                android:id="@+id/drawerType"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/accent"
+                android:textSize="15sp"
+                android:layout_marginBottom="4dp"/>
+
+            <TextView style="@style/SectionLabel" android:text="STATUS"/>
+            <TextView
+                android:id="@+id/drawerStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/accent"
+                android:textSize="14sp"
+                android:layout_marginBottom="4dp"/>
+
+            <TextView style="@style/SectionLabel" android:text="ONION"/>
+            <TextView
+                android:id="@+id/drawerOnion"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp"
+                android:typeface="monospace"
+                android:layout_marginBottom="4dp"
+                android:text="—"/>
+
+            <TextView style="@style/SectionLabel" android:text="MEMBERS"/>
+            <TextView
+                android:id="@+id/drawerMembers"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_muted"
+                android:textSize="14sp"
+                android:layout_marginBottom="4dp"
+                android:text="—"/>
+
+            <TextView style="@style/SectionLabel" android:text="CONNECTED"/>
+            <TextView
+                android:id="@+id/drawerNames"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp"
+                android:layout_marginBottom="4dp"
+                android:text="—"/>
+
+            <TextView style="@style/SectionLabel" android:text="BACKUPS"/>
+            <TextView
+                android:id="@+id/drawerBackups"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/accent"
+                android:textSize="14sp"
+                android:layout_marginBottom="4dp"
+                android:text="—"/>
+
+            <TextView style="@style/SectionLabel" android:text="DISAPPEARING MESSAGES"/>
+            <Button
+                android:id="@+id/ttlBtn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="Off"
+                android:textColor="@color/accent"
+                android:textSize="14sp"
+                android:background="@drawable/bg_drawer_button"
+                android:layout_marginBottom="12dp"/>
+
+            <TextView style="@style/SectionLabel" android:text="GROUP CREDENTIALS"/>
+            <TextView
+                android:id="@+id/drawerGroupName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text"
+                android:textSize="14sp"
+                android:layout_marginBottom="2dp"
+                android:text="—"/>
+
+            <TextView
+                android:id="@+id/drawerPassphrase"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp"
+                android:layout_marginBottom="4dp"
+                android:text="—"/>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/border"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"/>
+
+            <Button
+                android:id="@+id/shareCredsBtn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginBottom="6dp"
+                android:text="Copy group credentials"
+                android:textColor="@color/text"
+                android:textSize="13sp"
+                android:background="@drawable/bg_drawer_button"/>
+
+            <Button
+                android:id="@+id/showQrBtn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginBottom="6dp"
+                android:text="Show QR"
+                android:textColor="@color/text"
+                android:textSize="13sp"
+                android:background="@drawable/bg_drawer_button"/>
+
+            <Button
+                android:id="@+id/copyOnionBtn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginBottom="6dp"
+                android:text="Copy onion address"
+                android:textColor="@color/text"
+                android:textSize="13sp"
+                android:background="@drawable/bg_drawer_button"/>
+
+            <Button
+                android:id="@+id/clearHistoryBtn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginBottom="6dp"
+                android:text="Clear chat history"
+                android:textColor="@color/text"
+                android:textSize="13sp"
+                android:background="@drawable/bg_drawer_button"/>
+
+            <Button
+                android:id="@+id/muteBtn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginBottom="6dp"
+                android:text="Mute notifications"
+                android:textColor="@color/text"
+                android:textSize="13sp"
+                android:background="@drawable/bg_drawer_button"/>
+
+            <Button
+                android:id="@+id/soundBtn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginBottom="6dp"
+                android:text="Sound: ON"
+                android:textColor="@color/text"
+                android:textSize="13sp"
+                android:background="@drawable/bg_drawer_button"/>
+
+            <Button
+                android:id="@+id/quietBtn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginBottom="6dp"
+                android:text="Quiet hours: OFF"
+                android:textColor="@color/text"
+                android:textSize="13sp"
+                android:background="@drawable/bg_drawer_button"/>
+
+            <Button
+                android:id="@+id/switchGroupBtn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginBottom="6dp"
+                android:text="Switch group"
+                android:textColor="@color/text"
+                android:textSize="13sp"
+                android:background="@drawable/bg_drawer_button"/>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/border"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="12dp"/>
+
+            <Button
+                android:id="@+id/exportLogBtn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginBottom="6dp"
+                android:text="Export log"
+                android:textColor="@color/text"
+                android:textSize="13sp"
+                android:background="@drawable/bg_drawer_button"/>
+
+            <Button
+                android:id="@+id/leaveBtn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="Leave group"
+                android:textColor="@color/danger"
+                android:textSize="13sp"
+                android:background="@drawable/bg_drawer_button"/>
+
+            <TextView
+                android:id="@+id/versionLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Version"
+                android:textColor="@color/text_hint"
+                android:textSize="10sp"
+                android:gravity="center"
+                android:layout_marginTop="18dp"
+                android:letterSpacing="0.05"/>
+
+        </LinearLayout>
+    </ScrollView>
+
+</FrameLayout>
