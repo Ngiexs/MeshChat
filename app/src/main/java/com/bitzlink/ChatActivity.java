@@ -626,6 +626,48 @@ public class ChatActivity extends Activity {
                 .show();
     }
 
+    /**
+     * Called when the pre-flight probe detects that another device is
+     * already hosting this group's onion address. Refuses to publish
+     * the descriptor, clears auto-connect, and bounces back to the
+     * welcome screen.
+     */
+    private void handleHostAlreadyLive() {
+        if (isFinishing()) return;
+
+        new SessionStore(ChatActivity.this).setAutoConnect(false);
+
+        new AlertDialog.Builder(ChatActivity.this)
+                .setTitle("Group already live")
+                .setMessage("Another device is already hosting this "
+                        + "group on this onion address.\n\n"
+                        + "If you host here too, both devices will "
+                        + "publish the same hidden service and messages "
+                        + "will split into two disconnected groups.\n\n"
+                        + "Tap OK to go back, then choose Join instead "
+                        + "if you want to connect to the existing host.")
+                .setPositiveButton("OK",
+                        new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        try {
+                            if (service != null) service.stopAll();
+                        } catch (Exception e) { }
+                        try {
+                            stopService(new Intent(ChatActivity.this,
+                                    MeshService.class));
+                        } catch (Exception e) { }
+                        Intent i = new Intent(ChatActivity.this,
+                                MainActivity.class);
+                        i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                | Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(i);
+                        finish();
+                    }
+                })
+                .setCancelable(false)
+                .show();
+    }
+
     private void updateTtlBtn() {
         if (ttlBtn == null) return;
         String label = AppConfig.ttlLabel(currentTtlMs);
@@ -1795,8 +1837,16 @@ public class ChatActivity extends Activity {
                     maybeNotify(m);
                 }
                 public void onStatus(final String s) {
+                    // Intercept the host-already-live refusal signal
+                    // before it reaches the drawer status label.
                     runOnUiThread(new Runnable() {
-                        public void run() { setStatus(s); }
+                        public void run() {
+                            if (MeshService.STATUS_HOST_ALREADY_LIVE.equals(s)) {
+                                handleHostAlreadyLive();
+                                return;
+                            }
+                            setStatus(s);
+                        }
                     });
                 }
                 public void onTyping(final String who) { showTyping(who); }

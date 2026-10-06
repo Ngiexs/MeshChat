@@ -10,7 +10,11 @@ import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -24,12 +28,9 @@ public class TorManager {
     public interface Listener {
         void onTorReady(int socksPort, String onionAddress);
         void onError(String err);
-        // Optional: bootstrap progress. Default no-op via wrapper below.
         void onProgress(int percent);
     }
 
-    // Convenience base class so callers can implement just the two
-    // methods they care about.
     public static abstract class SimpleListener implements Listener {
         public void onProgress(int percent) { }
     }
@@ -187,6 +188,105 @@ public class TorManager {
         }
         return null;
     }
+
+    // ── Pre-flight probe helpers ─────────────────────────────────────
+
+    /**
+     * Returns true if this group already has a hidden-service identity
+     * on disk (hostname + secret key). New groups return false — there
+     * is nothing to probe and no live host could exist yet.
+     */
+    public boolean hasExistingHsIdentity(String groupName) {
+        File hsDir = getHsDir(GroupRegistry.sanitize(groupName));
+        File hostnameFile = new File(hsDir, "hostname");
+        File secretFile   = new File(hsDir, "hs_ed25519_secret_key");
+        return hostnameFile.exists() && secretFile.exists();
+    }
+
+    /**
+     * Reads the onion address for this group from disk without starting
+     * Tor. Returns null if the identity doesn't exist or the file is
+     * unreadable.
+     */
+    public String readOnionFromDisk(String groupName) {
+        try {
+            File hsDir = getHsDir(GroupRegistry.sanitize(groupName));
+            File h = new File(hsDir, "hostname");
+            if (!h.exists()) return null;
+            BufferedReader r = new BufferedReader(new FileReader(h));
+            try {
+                String line = r.readLine();
+                return line == null ? null : line.trim();
+            } finally {
+                try { r.close(); } catch (Exception ignored) { }
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Opens a SOCKS connection through the running Tor to onion:port,
+     * sends a HELLO, and reads one line back. Returns true if the peer
+     * responds with a MeshChat protocol line — meaning a live host is
+     * already publishing this onion.
+     *
+     * Requires Tor to be running and ready. Returns false if Tor isn't
+     * ready, the connect times out, or the peer sends nothing.
+     */
+    public boolean probeExistingHost(String onion, int port,
+                                     String probeName, long timeoutMs) {
+        if (onion == null || onion.length() == 0) return false;
+        if (!running || !ready) {
+            Log.i(TRACE, "probe: tor not ready, skipping");
+            return false;
+        }
+        int sp = getSocksPort();
+        if (sp <= 0) return false;
+
+        Socket s = null;
+        try {
+            Proxy proxy = new Proxy(Proxy.Type.SOCKS,
+                    new InetSocketAddress("127.0.0.1", sp));
+            s = new Socket(proxy);
+            s.setTcpNoDelay(true);
+            s.setSoTimeout((int) timeoutMs);
+            s.connect(InetSocketAddress.createUnresolved(onion, port),
+                    (int) timeoutMs);
+
+            PrintWriter out = new PrintWriter(s.getOutputStream(), true);
+            out.println(Protocol.pack(Protocol.HELLO, probeName));
+            out.flush();
+
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(s.getInputStream()));
+            String line = in.readLine();
+            if (line == null) {
+                Log.i(TRACE, "probe: connected but no bytes, dead");
+                return false;
+            }
+            String[] p = Protocol.unpack(line);
+            if (p.length >= 1) {
+                String t = p[0];
+                if (Protocol.GROUPKEY.equals(t)
+                        || Protocol.ROSTER.equals(t)
+                        || Protocol.PONG.equals(t)
+                        || Protocol.NAMES.equals(t)) {
+                    Log.w(TRACE, "probe: live host, type=" + t);
+                    return true;
+                }
+            }
+            Log.i(TRACE, "probe: unexpected first line, dead");
+            return false;
+        } catch (Exception e) {
+            Log.i(TRACE, "probe: " + e.getMessage());
+            return false;
+        } finally {
+            if (s != null) { try { s.close(); } catch (Exception ignored) { } }
+        }
+    }
+
+    // ── HS bundle import/export ──────────────────────────────────────
 
     public String exportHsBundle() {
         return exportHsBundle(currentGroup);

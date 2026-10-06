@@ -50,6 +50,14 @@ public class MeshService extends Service {
     public static final String ACTION_SEND_TEXT = "com.bitzlink.ACTION_SEND_TEXT";
     public static final String EXTRA_TEXT = "text";
 
+    /**
+     * Magic status string dispatched to the UI when the pre-flight
+     * probe finds a live host already publishing this group's onion.
+     * ChatActivity intercepts this and shows a refusal dialog instead
+     * of displaying it as plain status text.
+     */
+    public static final String STATUS_HOST_ALREADY_LIVE = "HOST_ALREADY_LIVE";
+
     public class LocalBinder extends Binder {
         public MeshService get() { return MeshService.this; }
     }
@@ -442,6 +450,8 @@ public class MeshService extends Service {
         activeNetworks.clear();
     }
 
+    // ── Host start: pre-flight probe then host mode ──────────────────
+
     public synchronized void startAsServer(final String name,
                                            final GroupKeyHolder kh,
                                            final int port,
@@ -450,7 +460,6 @@ public class MeshService extends Service {
 
         if (amHost && server != null) {
             Log.i(TRACE, "MeshService: already hosting, listener attached");
-            // NEW: dispatch current state to the freshly-attached listener.
             if (listener != null) {
                 listener.onStatus("Host listening on " + currentPort);
                 listener.onRoster(server.getClientCount(),
@@ -462,9 +471,7 @@ public class MeshService extends Service {
         }
         if (startingServer) {
             Log.i(TRACE, "MeshService: server start already in progress");
-            if (listener != null) {
-                listener.onStatus("Host starting…");
-            }
+            if (listener != null) listener.onStatus("Host starting…");
             return;
         }
 
@@ -482,11 +489,80 @@ public class MeshService extends Service {
         this.election    = null;
         updateWakeLock();
 
-        Log.i(TRACE, "MeshService: startAsServer group='" + activeGroup
-                + "' port=" + port);
+        final String fGroup = this.activeGroup;
+        final TorManager tm = TorManager.get(this);
+        this.tor = tm;
 
-        tor = TorManager.get(this);
-        tor.start(activeGroup, true, new TorManager.Listener() {
+        final boolean hasId = tm.hasExistingHsIdentity(fGroup);
+        final String knownOnion = hasId ? tm.readOnionFromDisk(fGroup) : null;
+
+        Log.i(TRACE, "MeshService: startAsServer group='" + fGroup
+                + "' port=" + port
+                + " hasIdentity=" + hasId
+                + " onion=" + shortOnion(knownOnion));
+
+        if (!hasId || knownOnion == null) {
+            startTorHostMode(name, kh, port, fGroup);
+            return;
+        }
+
+        startTorClientAndProbe(name, kh, port, fGroup, knownOnion, tm);
+    }
+
+    private void startTorClientAndProbe(final String name,
+                                        final GroupKeyHolder kh,
+                                        final int port,
+                                        final String group,
+                                        final String knownOnion,
+                                        final TorManager tm) {
+        dispatchingServerListener.onStatus(
+                "Checking if group is already live…");
+        tm.start(group, false, new TorManager.Listener() {
+            public void onTorReady(int socks, String onion) {
+                new Thread(new Runnable() {
+                    public void run() {
+                        boolean live = tm.probeExistingHost(
+                                knownOnion, port, "__probe__", 20000L);
+                        if (live) {
+                            Log.w(TRACE, "MeshService: refusing to host, "
+                                    + "onion already live");
+                            synchronized (MeshService.this) {
+                                startingServer = false;
+                                amHost = false;
+                            }
+                            updateWakeLock();
+                            dispatchingServerListener.onStatus(
+                                    STATUS_HOST_ALREADY_LIVE);
+                            return;
+                        }
+                        Log.i(TRACE, "MeshService: probe clear, publishing");
+                        handler.post(new Runnable() {
+                            public void run() {
+                                startTorHostMode(name, kh, port, group);
+                            }
+                        });
+                    }
+                }, "host-probe").start();
+            }
+            public void onError(String err) {
+                synchronized (MeshService.this) {
+                    startingServer = false;
+                    amHost = false;
+                }
+                dispatchingServerListener.onStatus("Tor error: " + err);
+            }
+            public void onProgress(int pct) {
+                dispatchingServerListener.onStatus(
+                        "Bootstrapping Tor " + pct + "%");
+            }
+        });
+    }
+
+    private void startTorHostMode(final String name,
+                                  final GroupKeyHolder kh,
+                                  final int port,
+                                  final String group) {
+        tor.start(group, true, new TorManager.Listener() {
             public void onTorReady(int socksPort, String onion) {
                 synchronized (MeshService.this) {
                     if (!startingServer) return;
@@ -506,6 +582,7 @@ public class MeshService extends Service {
             public void onError(String err) {
                 synchronized (MeshService.this) {
                     startingServer = false;
+                    amHost = false;
                 }
                 dispatchingServerListener.onStatus("Tor error: " + err);
             }
@@ -515,6 +592,14 @@ public class MeshService extends Service {
             }
         });
     }
+
+    private static String shortOnion(String o) {
+        if (o == null || o.length() == 0) return "—";
+        if (o.length() <= 16) return o;
+        return o.substring(0, 8) + "…" + o.substring(o.length() - 4);
+    }
+
+    // ── Client start ─────────────────────────────────────────────────
 
     public synchronized void startAsClient(final String name,
                                            final GroupKeyHolder kh,
@@ -528,7 +613,6 @@ public class MeshService extends Service {
 
         if (!amHost && node != null && h.equals(currentPeer)) {
             Log.i(TRACE, "MeshService: already client, listener attached");
-            // NEW: dispatch current state to the freshly-attached listener.
             if (listener != null) {
                 listener.onStatus("Connected");
                 if (heartbeat != null) {
@@ -841,13 +925,6 @@ public class MeshService extends Service {
         updateWakeLock();
     }
 
-    /**
-     * Android 14+ tears down foreground dataSync services after 6 hours
-     * of continuous run. The system calls this before killing us. We
-     * schedule a restart 5 seconds out via AlarmManager and stop
-     * ourselves; the alarm restarts a fresh foreground service with a
-     * reset clock.
-     */
     @Override
     public void onTimeout(int startId) {
         Log.w(TRACE, "MeshService: onTimeout — restarting after 6h cap");

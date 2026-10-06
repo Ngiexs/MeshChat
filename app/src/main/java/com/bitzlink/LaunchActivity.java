@@ -63,7 +63,7 @@ public class LaunchActivity extends Activity {
 
         int launches = bumpLaunchCount();
         if (version != null) {
-            version.setText("Version 0.4.0-beta1 ·  Launch #" + launches);
+            version.setText("Version 0.4.1-beta1 ·  Launch #" + launches);
         }
 
         final Handler h = new Handler(Looper.getMainLooper());
