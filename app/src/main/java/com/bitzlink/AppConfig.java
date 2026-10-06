@@ -2,6 +2,8 @@ package com.bitzlink;
 
 public class AppConfig {
 
+    public static final String VERSION_LABEL = "0.4.1-beta1";
+
     public static final int DEFAULT_PORT = 8888;
     public static final int SOCKS_PORT   = 9050;
 

@@ -50,12 +50,6 @@ public class MeshService extends Service {
     public static final String ACTION_SEND_TEXT = "com.bitzlink.ACTION_SEND_TEXT";
     public static final String EXTRA_TEXT = "text";
 
-    /**
-     * Magic status string dispatched to the UI when the pre-flight
-     * probe finds a live host already publishing this group's onion.
-     * ChatActivity intercepts this and shows a refusal dialog instead
-     * of displaying it as plain status text.
-     */
     public static final String STATUS_HOST_ALREADY_LIVE = "HOST_ALREADY_LIVE";
 
     public class LocalBinder extends Binder {
@@ -82,6 +76,9 @@ public class MeshService extends Service {
     private volatile boolean electing = false;
     private volatile boolean startingClient = false;
     private volatile boolean startingServer = false;
+
+    // Notification-reply text held until a server or node is ready.
+    private volatile String pendingReplyText = null;
 
     private volatile MeshNode.Listener   uiNodeListener;
     private volatile MeshServer.Listener uiServerListener;
@@ -110,6 +107,10 @@ public class MeshService extends Service {
         }
         public void onClearHistory() {
             MeshNode.Listener l = uiNodeListener; if (l != null) l.onClearHistory();
+        }
+        public void onSendFailed(String msgId, String reason) {
+            MeshNode.Listener l = uiNodeListener;
+            if (l != null) l.onSendFailed(msgId, reason);
         }
     };
 
@@ -273,6 +274,16 @@ public class MeshService extends Service {
         GroupKeyHolder kh = new GroupKeyHolder(null);
         kh.setFromBase64(b64);
 
+        // Cold-start safety: if myName/keyHolder were not set (e.g. the
+        // service was just spawned to deliver a notification reply),
+        // populate them so downstream send paths have identity.
+        if (this.myName == null || this.myName.length() == 0) {
+            this.myName = sessionName;
+        }
+        if (this.keyHolder == null || !this.keyHolder.hasKey()) {
+            this.keyHolder = kh;
+        }
+
         Log.i(TRACE, "MeshService: resuming group='" + activeGroup
                 + "' as " + (wasHost ? "HOST" : "CLIENT"));
 
@@ -302,14 +313,56 @@ public class MeshService extends Service {
 
     private void sendFromNotification(String text) {
         if (text == null || text.trim().length() == 0) return;
-        if (myName == null || keyHolder == null || !keyHolder.hasKey()) {
+
+        // Cold-start safety: identity and key may not yet be loaded.
+        if (myName == null || myName.length() == 0) {
+            myName = new SessionStore(this).getName();
+        }
+        if (keyHolder == null || !keyHolder.hasKey()) {
+            String b64 = new SessionStore(this).getGroupKey();
+            if (b64 != null && b64.length() > 0) {
+                if (keyHolder == null) keyHolder = new GroupKeyHolder(null);
+                keyHolder.setFromBase64(b64);
+            }
+        }
+        if (myName == null || myName.length() == 0
+                || keyHolder == null || !keyHolder.hasKey()) {
             Log.w(TRACE, "MeshService: reply dropped, no session/key");
             return;
         }
+
+        pendingReplyText = text;
+
+        // If we're already connected, send right away.
+        if ((amHost && server != null) || node != null) {
+            flushPendingReply();
+            return;
+        }
+
+        // Otherwise, try to resume; onTorReady will flush.
+        SessionStore store = new SessionStore(this);
+        if (!store.shouldAutoConnect() || !store.hasSession()) {
+            Log.w(TRACE, "MeshService: reply dropped, no resumable session");
+            pendingReplyText = null;
+            return;
+        }
+        resumeRoleFromSession();
+    }
+
+    private void flushPendingReply() {
+        String text = pendingReplyText;
+        if (text == null) return;
+
+        if (myName == null || myName.length() == 0
+                || keyHolder == null || !keyHolder.hasKey()) {
+            return;
+        }
+
         try {
             long ts = System.currentTimeMillis();
             long ttl = new SessionStore(this).getMessageTtlMs();
             if (amHost && server != null) {
+                pendingReplyText = null;
                 String msgId = UUID.randomUUID().toString();
                 String plain = "MSG\u0001" + myName
                         + "\u0001" + ts + "\u0001" + text
@@ -318,13 +371,14 @@ public class MeshService extends Service {
                 String line = Protocol.pack(Protocol.MSG, msgId, cipher);
                 server.sendFromHost(line);
             } else if (node != null) {
+                pendingReplyText = null;
                 String msgId = UUID.randomUUID().toString();
                 node.sendChat(text, msgId, null, null, ttl);
-            } else {
-                Log.w(TRACE, "MeshService: reply dropped, no server or node");
             }
+            // else: still not ready, keep the pending text queued.
         } catch (Exception e) {
             Log.w(TRACE, "MeshService: reply failed: " + e.getMessage());
+            pendingReplyText = null;
         }
     }
 
@@ -449,8 +503,6 @@ public class MeshService extends Service {
         }
         activeNetworks.clear();
     }
-
-    // ── Host start: pre-flight probe then host mode ──────────────────
 
     public synchronized void startAsServer(final String name,
                                            final GroupKeyHolder kh,
@@ -578,6 +630,7 @@ public class MeshService extends Service {
                         0, MeshServer.MAX_BACKUPS);
                 refreshCachedState();
                 Log.i(TRACE, "MeshService: server bound on port " + port);
+                flushPendingReply();
             }
             public void onError(String err) {
                 synchronized (MeshService.this) {
@@ -598,8 +651,6 @@ public class MeshService extends Service {
         if (o.length() <= 16) return o;
         return o.substring(0, 8) + "…" + o.substring(o.length() - 4);
     }
-
-    // ── Client start ─────────────────────────────────────────────────
 
     public synchronized void startAsClient(final String name,
                                            final GroupKeyHolder kh,
@@ -676,6 +727,7 @@ public class MeshService extends Service {
                         replica, heartbeat, election, wantBackup);
                 node.start();
                 Log.i(TRACE, "MeshService: node started, heartbeat armed");
+                flushPendingReply();
             }
             public void onError(String err) {
                 synchronized (MeshService.this) {
@@ -757,6 +809,7 @@ public class MeshService extends Service {
                         dispatchingNodeListener,
                         replica, heartbeat, election, isBackup);
                 node.start();
+                flushPendingReply();
             }
         }, RECONNECT_DELAY_MS);
     }
@@ -805,6 +858,7 @@ public class MeshService extends Service {
                 server.start();
                 refreshCachedState();
                 Log.i(TRACE, "promoteToHost: server bound");
+                flushPendingReply();
             }
             public void onError(String err) {
                 dispatchingNodeListener.onStatus(
@@ -872,13 +926,31 @@ public class MeshService extends Service {
              .setSmallIcon(android.R.drawable.stat_notify_chat)
              .setAutoCancel(true);
 
+            // The content intent survives the service being killed, so
+            // bake the identity in defensively: prefer the live service
+            // fields, fall back to disk.
+            String notifyName   = myName;
+            String notifyPeer   = currentPeer;
+            boolean notifyHost  = amHost;
+            boolean notifyBkup  = isBackup;
+            if (notifyName == null || notifyName.length() == 0) {
+                notifyName = ss.getName();
+                if (notifyPeer == null || notifyPeer.length() == 0) {
+                    notifyPeer = ss.getPeer();
+                }
+                notifyHost = ss.isHost();
+                notifyBkup = ss.isBackup();
+            }
+            if (notifyName == null) notifyName = "";
+            if (notifyPeer == null) notifyPeer = "";
+
             Intent open = new Intent(this, ChatActivity.class);
             open.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP
                     | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            open.putExtra("name", myName);
-            open.putExtra("peer", currentPeer);
-            open.putExtra("isHost", amHost);
-            open.putExtra("isBackup", isBackup);
+            open.putExtra("name", notifyName);
+            open.putExtra("peer", notifyPeer);
+            open.putExtra("isHost", notifyHost);
+            open.putExtra("isBackup", notifyBkup);
             int contentFlags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= 23)
                 contentFlags |= PendingIntent.FLAG_IMMUTABLE;

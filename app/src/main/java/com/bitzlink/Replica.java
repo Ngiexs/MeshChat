@@ -16,27 +16,18 @@ import java.util.Set;
 public class Replica {
 
     private static final String TAG = "Replica";
-    private static final int MAX_MESSAGES = 200;
-    private static final int SEEN_CAP     = 1000;
+    private static final int MAX_MESSAGES = 1000;
+    private static final int SEEN_CAP     = 3000;
     private static final String FILE_NAME = "replica.log";
 
     private final File file;
     private final Deque<String> messages = new ArrayDeque<String>();
     private final Set<String> seenIds    = new HashSet<String>();
 
-    /**
-     * Legacy constructor. Uses the shared replica.log at the root
-     * of filesDir. Kept so existing installs keep their history.
-     */
     public Replica(File appFilesDir) {
         this(appFilesDir, "");
     }
 
-    /**
-     * Per-group constructor. Empty group name falls back to the
-     * legacy path. Named groups get their own subdirectory under
-     * filesDir/groups/<sanitized>/replica.log.
-     */
     public Replica(File appFilesDir, String groupName) {
         String safe = GroupRegistry.sanitize(groupName);
         File target;
@@ -93,10 +84,6 @@ public class Replica {
         saveToDisk();
     }
 
-    /**
-     * Removes any message whose wire line contains the given msgId
-     * in position 1. Used by the ephemeral expiry sweep.
-     */
     public synchronized void removeById(String msgId) {
         if (msgId == null || msgId.length() == 0) return;
         boolean changed = false;

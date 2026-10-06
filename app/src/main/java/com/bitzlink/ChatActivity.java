@@ -74,6 +74,7 @@ public class ChatActivity extends Activity {
     private static final int COLOR_TICK_PENDING    = 0xFF8B98A5;
     private static final int COLOR_TICK_PARTIAL    = 0xFF5CFFC8;
     private static final int COLOR_TICK_DELIVERED  = 0xFF3FA88B;
+    private static final int COLOR_TICK_FAILED     = 0xFFFF5252;
     private static final int COLOR_ACCENT          = 0xFF5CFFC8;
     private static final int COLOR_STATUS_OK       = 0xFF5CFFC8;
     private static final int COLOR_STATUS_UNSTABLE = 0xFFFFA726;
@@ -127,6 +128,7 @@ public class ChatActivity extends Activity {
     private TextView     drawerBackups;
     private TextView     drawerGroupName;
     private TextView     drawerPassphrase;
+    private TextView     versionLabel;
     private Button       muteBtn;
     private Button       soundBtn;
     private Button       quietBtn;
@@ -137,6 +139,7 @@ public class ChatActivity extends Activity {
     private Button       showQrBtn;
     private Button       ttlBtn;
     private Button       switchGroupBtn;
+    private Button       exportLogBtn;
     private boolean      drawerOpen = false;
 
     private String  name;
@@ -174,6 +177,7 @@ public class ChatActivity extends Activity {
 
     private Set<String> deletedSigs = new HashSet<String>();
     private final Set<String> renderedSigs = new HashSet<String>();
+    private final Set<String> failedSends = new HashSet<String>();
 
     private boolean networkStarted = false;
 
@@ -287,6 +291,7 @@ public class ChatActivity extends Activity {
         drawerBackups = (TextView)    findViewById(R.id.drawerBackups);
         drawerGroupName = (TextView)  findViewById(R.id.drawerGroupName);
         drawerPassphrase = (TextView) findViewById(R.id.drawerPassphrase);
+        versionLabel  = (TextView)    findViewById(R.id.versionLabel);
         muteBtn       = (Button)      findViewById(R.id.muteBtn);
         soundBtn      = (Button)      findViewById(R.id.soundBtn);
         quietBtn      = (Button)      findViewById(R.id.quietBtn);
@@ -297,15 +302,44 @@ public class ChatActivity extends Activity {
         showQrBtn     = (Button)      findViewById(R.id.showQrBtn);
         ttlBtn        = (Button)      findViewById(R.id.ttlBtn);
         switchGroupBtn = (Button)     findViewById(R.id.switchGroupBtn);
+        exportLogBtn  = (Button)      findViewById(R.id.exportLogBtn);
+
+        if (versionLabel != null) {
+            versionLabel.setText("version " + AppConfig.VERSION_LABEL);
+        }
 
         activeGroup = new GroupRegistry(this).getActiveGroup();
         SessionStore session = new SessionStore(this);
         currentTtlMs = session.getMessageTtlMs();
 
+        // ── Launch extras, with SessionStore fallback ────────────────
+        // The intent may be built by the service (normal launch) or by
+        // a notification tap after the service has been killed. In both
+        // cases we prefer the intent, but if any field is missing we
+        // fall back to the on-disk session so name / peer / role are
+        // never null going into the network init path.
         name     = getIntent().getStringExtra("name");
         peer     = getIntent().getStringExtra("peer");
-        isHost   = getIntent().getBooleanExtra("isHost", false);
-        isBackup = getIntent().getBooleanExtra("isBackup", false);
+        if (name == null || name.length() == 0) {
+            String sn = session.getName();
+            if (sn != null && sn.length() > 0) name = sn;
+        }
+        if (peer == null || peer.length() == 0) {
+            String sp = session.getPeer();
+            if (sp != null && sp.length() > 0) peer = sp;
+        }
+        if (peer == null) peer = "";
+
+        isHost = getIntent().hasExtra("isHost")
+                ? getIntent().getBooleanExtra("isHost", false)
+                : session.isHost();
+        isBackup = getIntent().hasExtra("isBackup")
+                ? getIntent().getBooleanExtra("isBackup", false)
+                : session.isBackup();
+
+        Log.i("MeshTrace", "ChatActivity launch: name=" + name
+                + " peer=" + (peer.length() > 0 ? "yes" : "no")
+                + " isHost=" + isHost + " isBackup=" + isBackup);
 
         typeLabel = computeTypeLabel();
 
@@ -495,6 +529,11 @@ public class ChatActivity extends Activity {
         switchGroupBtn.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { switchGroup(); }
         });
+        if (exportLogBtn != null) {
+            exportLogBtn.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) { exportLog(); }
+            });
+        }
 
         leaveBtn.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
@@ -552,11 +591,13 @@ public class ChatActivity extends Activity {
                                 + "\u0001" + text
                                 + "\u0001" + ttl;
                     }
-                    sendFromHost(plain, msgId);
+                    boolean sent = sendFromHost(plain, msgId);
                     addBubble(new PeerState.ChatMessage(
                             name, text, true, ts, replySender, replyBody,
                             expiresAt), msgId);
-                    markAcked(msgId, "_host");
+                    if (sent) {
+                        markAcked(msgId, "_host");
+                    }
                 } else if (service != null && service.getNode() != null
                         && !service.getNode().isFatalError()) {
                     String msgId = UUID.randomUUID().toString();
@@ -565,6 +606,10 @@ public class ChatActivity extends Activity {
                     addBubble(new PeerState.ChatMessage(
                             name, text, true, ts, replySender, replyBody,
                             expiresAt), msgId);
+                } else {
+                    Toast.makeText(ChatActivity.this,
+                            "Not connected — message not sent",
+                            Toast.LENGTH_SHORT).show();
                 }
                 clearReply();
             }
@@ -589,8 +634,92 @@ public class ChatActivity extends Activity {
         });
     }
 
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+
+        // A notification tap while we're already alive lands here. The
+        // service may have been restarted between the notification
+        // being posted and this delivery, so re-read the extras and
+        // refresh any state that could have drifted.
+        String nName = intent.getStringExtra("name");
+        String nPeer = intent.getStringExtra("peer");
+        boolean nHost = intent.hasExtra("isHost")
+                ? intent.getBooleanExtra("isHost", false) : isHost;
+        boolean nBackup = intent.hasExtra("isBackup")
+                ? intent.getBooleanExtra("isBackup", false) : isBackup;
+
+        boolean changed = false;
+        if (nName != null && nName.length() > 0
+                && (name == null || !nName.equals(name))) {
+            name = nName;
+            if (drawerName != null) drawerName.setText(name);
+            changed = true;
+        }
+        if (nPeer != null && nPeer.length() > 0
+                && (peer == null || !nPeer.equals(peer))) {
+            peer = nPeer;
+            changed = true;
+        }
+        if (nHost != isHost) {
+            isHost = nHost;
+            typeLabel = computeTypeLabel();
+            if (drawerType != null) {
+                drawerType.setText(typeLabel);
+                drawerType.setTextColor(typeColor());
+            }
+            changed = true;
+        }
+        if (nBackup != isBackup) {
+            isBackup = nBackup;
+            typeLabel = computeTypeLabel();
+            if (drawerType != null) {
+                drawerType.setText(typeLabel);
+                drawerType.setTextColor(typeColor());
+            }
+            changed = true;
+        }
+
+        if (changed) {
+            Log.i("MeshTrace", "ChatActivity onNewIntent: refreshed state"
+                    + " name=" + name + " isHost=" + isHost
+                    + " isBackup=" + isBackup);
+        }
+
+        // Always refresh display in case the service reconnected.
+        refreshOnion();
+        refreshDrawerSnapshot();
+        updateSendBtn();
+    }
+
+    private void exportLog() {
+        Replica r = service != null ? service.getReplica() : null;
+        if (r == null) {
+            Toast.makeText(this, "No history to export",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        List<String> lines = r.snapshot();
+        StringBuilder sb = new StringBuilder();
+        for (String l : lines) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(l);
+        }
+        ClipboardManager cm = (ClipboardManager)
+                getSystemService(CLIPBOARD_SERVICE);
+        if (cm != null) {
+            cm.setPrimaryClip(ClipData.newPlainText(
+                    "meshchat-log", sb.toString()));
+            Toast.makeText(this,
+                    "Log copied (" + lines.size() + " entries)",
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private void markAcked(String msgId, String acker) {
         if (msgId == null) return;
+        failedSends.remove(msgId);
         Set<String> set = ackedBy.get(msgId);
         if (set == null) {
             set = new HashSet<String>();
@@ -598,6 +727,17 @@ public class ChatActivity extends Activity {
         }
         set.add(acker);
         updateTick(msgId);
+    }
+
+    private void handleSendFailed(String msgId, String reason) {
+        if (msgId != null) {
+            failedSends.add(msgId);
+            updateTick(msgId);
+        }
+        if (isFinishing()) return;
+        Toast.makeText(ChatActivity.this,
+                "Message not delivered — " + reason,
+                Toast.LENGTH_LONG).show();
     }
 
     private void switchGroup() {
@@ -626,12 +766,6 @@ public class ChatActivity extends Activity {
                 .show();
     }
 
-    /**
-     * Called when the pre-flight probe detects that another device is
-     * already hosting this group's onion address. Refuses to publish
-     * the descriptor, clears auto-connect, and bounces back to the
-     * welcome screen.
-     */
     private void handleHostAlreadyLive() {
         if (isFinishing()) return;
 
@@ -725,6 +859,7 @@ public class ChatActivity extends Activity {
             if (meta.msgId != null) {
                 pendingTicks.remove(meta.msgId);
                 ackedBy.remove(meta.msgId);
+                failedSends.remove(meta.msgId);
             }
         }
     }
@@ -970,6 +1105,7 @@ public class ChatActivity extends Activity {
         ackedBy.clear();
         timeEntries.clear();
         renderedSigs.clear();
+        failedSends.clear();
         lastSender = null;
         lastMessageTs = 0;
         lastDividerDay = -1;
@@ -1048,9 +1184,6 @@ public class ChatActivity extends Activity {
                 if (m.expiresAt > 0 && now >= m.expiresAt) continue;
                 addBubble(m, msgId);
 
-                // ackedBy is not persisted, so on reload a message we
-                // sent ourselves would otherwise show ◯ forever. Self-
-                // ack our own messages so they show at least ✓ 1.
                 if (m.mine && msgId != null) {
                     markAcked(msgId, "_host");
                 }
@@ -1419,6 +1552,13 @@ public class ChatActivity extends Activity {
         if (msgId == null) return;
         TextView tick = pendingTicks.get(msgId);
         if (tick == null) return;
+
+        if (failedSends.contains(msgId)) {
+            tick.setText("!");
+            tick.setTextColor(COLOR_TICK_FAILED);
+            return;
+        }
+
         Set<String> ackers = ackedBy.get(msgId);
         int n = (ackers == null) ? 0 : ackers.size();
         if (n == 0) { tick.setText("◯"); tick.setTextColor(COLOR_TICK_PENDING); }
@@ -1436,17 +1576,25 @@ public class ChatActivity extends Activity {
         if (renderedSigs.contains(sig)) return;
         renderedSigs.add(sig);
 
+        boolean outOfOrder = m.timestampMs < maxRenderedTs;
+
         hideEmptyState();
-        maybeAddDateDivider(m.timestampMs);
-        if (!m.mine) maybeAddUnreadDivider(m.timestampMs);
-        if (m.timestampMs > maxRenderedTs) maxRenderedTs = m.timestampMs;
+        if (!outOfOrder) {
+            maybeAddDateDivider(m.timestampMs);
+            if (!m.mine) maybeAddUnreadDivider(m.timestampMs);
+        }
 
         final boolean isMine = m.mine;
-        boolean sameRun = (m.sender != null && m.sender.equals(lastSender))
+        boolean sameRun = !outOfOrder
+                && (m.sender != null && m.sender.equals(lastSender))
                 && (m.timestampMs - lastMessageTs) < GROUP_WINDOW_MS;
         boolean showAvatar = !isMine && !sameRun;
         boolean showSenderName = !isMine && !sameRun;
-        lastSender = m.sender; lastMessageTs = m.timestampMs;
+
+        if (!outOfOrder) {
+            lastSender = m.sender;
+            lastMessageTs = m.timestampMs;
+        }
 
         final LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -1595,9 +1743,27 @@ public class ChatActivity extends Activity {
         tag.expiresAt = m.expiresAt;
         row.setTag(tag);
 
-        messagesBox.addView(row);
+        if (outOfOrder) {
+            int insertAt = messagesBox.getChildCount();
+            for (int i = 0; i < messagesBox.getChildCount(); i++) {
+                View v = messagesBox.getChildAt(i);
+                Object t = v.getTag();
+                if (t instanceof RowMeta) {
+                    RowMeta existing = (RowMeta) t;
+                    if (m.timestampMs < existing.ts) {
+                        insertAt = i;
+                        break;
+                    }
+                }
+            }
+            messagesBox.addView(row, insertAt);
+        } else {
+            messagesBox.addView(row);
+        }
 
-        if (userAtBottom) {
+        if (m.timestampMs > maxRenderedTs) maxRenderedTs = m.timestampMs;
+
+        if (userAtBottom && !outOfOrder) {
             scroller.post(new Runnable() {
                 public void run() { scroller.fullScroll(View.FOCUS_DOWN); }
             });
@@ -1837,8 +2003,6 @@ public class ChatActivity extends Activity {
                     maybeNotify(m);
                 }
                 public void onStatus(final String s) {
-                    // Intercept the host-already-live refusal signal
-                    // before it reaches the drawer status label.
                     runOnUiThread(new Runnable() {
                         public void run() {
                             if (MeshService.STATUS_HOST_ALREADY_LIVE.equals(s)) {
@@ -1890,6 +2054,7 @@ public class ChatActivity extends Activity {
                             ackedBy.clear();
                             timeEntries.clear();
                             renderedSigs.clear();
+                            failedSends.clear();
                             lastSender = null;
                             lastMessageTs = 0;
                             lastDividerDay = -1;
@@ -1918,6 +2083,13 @@ public class ChatActivity extends Activity {
                     runOnUiThread(new Runnable() {
                         public void run() {
                             markAcked(msgId, acker);
+                        }
+                    });
+                }
+                public void onSendFailed(final String msgId, final String reason) {
+                    runOnUiThread(new Runnable() {
+                        public void run() {
+                            handleSendFailed(msgId, reason);
                         }
                     });
                 }
@@ -1995,17 +2167,27 @@ public class ChatActivity extends Activity {
         });
     }
 
-    private void sendFromHost(String plain, String msgId) {
+    private boolean sendFromHost(String plain, String msgId) {
         SecretKey k = keyHolder != null ? keyHolder.get() : null;
-        if (k == null) return;
+        if (k == null) {
+            if (msgId != null) handleSendFailed(msgId, "No group key");
+            return false;
+        }
         try {
             String cipher = CryptoUtils.encrypt(plain, k);
             String line = msgId != null
                     ? Protocol.pack(Protocol.MSG, msgId, cipher)
                     : Protocol.pack(Protocol.MSG, cipher);
-            if (service != null && service.getServer() != null)
-                service.getServer().sendFromHost(line);
-        } catch (Exception e) { }
+            if (service == null || service.getServer() == null) {
+                if (msgId != null) handleSendFailed(msgId, "Host not ready");
+                return false;
+            }
+            service.getServer().sendFromHost(line);
+            return true;
+        } catch (Exception e) {
+            if (msgId != null) handleSendFailed(msgId, e.getMessage());
+            return false;
+        }
     }
 
     protected void onDestroy() {

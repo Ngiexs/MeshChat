@@ -10,7 +10,9 @@ import java.net.Proxy;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -23,8 +25,6 @@ public class MeshNode {
     private static final String TAG   = "MeshNode";
     private static final String TRACE = "MeshTrace";
 
-    // 6 parallel attempts, 6s timeout each, 0.5s backoff between rounds.
-    // Failing round costs ~6.5s instead of the old ~14s.
     private static final int  ATTEMPTS_PER_ROUND = 6;
     private static final int  ATTEMPT_TIMEOUT_MS = 6000;
     private static final long BACKOFF_MS         = 500L;
@@ -37,6 +37,7 @@ public class MeshNode {
         void onNames(List<String> names);
         void onAck(String msgId, String acker);
         void onClearHistory();
+        void onSendFailed(String msgId, String reason);
     }
 
     private final String myName;
@@ -59,6 +60,13 @@ public class MeshNode {
     private Thread keepaliveThread;
 
     private final OutboundQueue pending = new OutboundQueue();
+
+    // Every chat message we've sent that hasn't been ACKed yet.
+    // msgId -> full wire line. On reconnect we resend all of these,
+    // which recovers messages that were written to a socket whose
+    // host had already died (Tor holds the write open silently).
+    private final Map<String, String> pendingAcks =
+            new ConcurrentHashMap<String, String>();
 
     public MeshNode(String myName, GroupKeyHolder keyHolder, Context ctx,
                     String host, int port,
@@ -123,9 +131,10 @@ public class MeshNode {
                 }
                 out.flush();
 
-                List<String> queued = pending.drain();
-                for (String q : queued) out.println(q);
-                if (!queued.isEmpty()) out.flush();
+                // Resend un-ACKed messages from any previous session.
+                // The host dedupes by msgId, so a message that did
+                // eventually make it through won't be duplicated.
+                resendPendingAcks();
 
                 if (listener != null) listener.onStatus("Connected");
                 Log.i(TRACE, "MeshNode: socket connected round " + round);
@@ -139,6 +148,24 @@ public class MeshNode {
             if (!running || fatalError) return;
             if (listener != null) listener.onStatus("Reconnecting...");
         }
+    }
+
+    private void resendPendingAcks() {
+        if (pendingAcks.isEmpty()) return;
+        PrintWriter w = out;
+        if (w == null) return;
+        int n = pendingAcks.size();
+        Log.i(TRACE, "MeshNode: resending " + n + " un-ACKed message"
+                + (n == 1 ? "" : "s"));
+        for (String line : pendingAcks.values()) {
+            try {
+                w.println(line);
+            } catch (Exception e) {
+                Log.w(TRACE, "MeshNode: resend failed: " + e.getMessage());
+                return;
+            }
+        }
+        try { w.flush(); } catch (Exception e) { }
     }
 
     private Socket raceConnections(final int round) {
@@ -368,12 +395,15 @@ public class MeshNode {
 
             } else if (Protocol.ACK.equals(type)) {
                 if (listener == null) return;
-                if (p.length >= 3) listener.onAck(p[1], p[2]);
-                else if (p.length >= 2) listener.onAck(p[1], "_host");
+                if (p.length >= 3) {
+                    pendingAcks.remove(p[1]);
+                    listener.onAck(p[1], p[2]);
+                } else if (p.length >= 2) {
+                    pendingAcks.remove(p[1]);
+                    listener.onAck(p[1], "_host");
+                }
 
             } else if (Protocol.PONG.equals(type)) {
-                // Host keepalive; readLoop already recorded the host
-                // as seen before dispatching to handle().
                 return;
 
             } else if (Protocol.NAMES.equals(type)) {
@@ -497,6 +527,7 @@ public class MeshNode {
                     SecretKey k = keyHolder.get();
                     if (k == null) {
                         Log.w(TRACE, "MeshNode: cannot send, no key yet");
+                        notifySendFailed(msgId, "No group key yet");
                         return;
                     }
                     String cipher = CryptoUtils.encrypt(plain, k);
@@ -508,18 +539,37 @@ public class MeshNode {
                     }
                     replica.append(line);
 
+                    if (msgId != null) {
+                        pendingAcks.put(msgId, line);
+                    }
+
                     PrintWriter w = out;
                     if (w == null) {
+                        // Will be resent when the socket comes back.
                         pending.enqueue(line);
                         return;
                     }
-                    w.println(line);
-                    w.flush();
+                    try {
+                        w.println(line);
+                        w.flush();
+                    } catch (Exception e) {
+                        Log.w(TRACE, "MeshNode: write failed: " + e.getMessage());
+                        notifySendFailed(msgId, "Connection lost");
+                    }
                 } catch (Exception e) {
                     Log.e(TRACE, "MeshNode send failed", e);
+                    notifySendFailed(msgId, e.getMessage());
                 }
             }
         }).start();
+    }
+
+    private void notifySendFailed(String msgId, String reason) {
+        if (msgId == null) return;
+        if (listener == null) return;
+        try {
+            listener.onSendFailed(msgId, reason == null ? "Send failed" : reason);
+        } catch (Exception e) { }
     }
 
     public void sendTyping() {
@@ -535,7 +585,7 @@ public class MeshNode {
         }).start();
     }
 
-    public int getPendingCount() { return pending.size(); }
+    public int getPendingCount() { return pendingAcks.size(); }
 
     public void stop() {
         running = false;
