@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:gravity="center">
+
+        <ImageView
+            android:id="@+id/launchIcon"
+            android:layout_width="120dp"
+            android:layout_height="120dp"
+            android:src="@drawable/ic_launcher_foreground"
+            android:alpha="0"
+            android:contentDescription="MeshChat"/>
+
+        <TextView
+            android:id="@+id/launchTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="MeshChat"
+            android:textColor="@color/text"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:letterSpacing="-0.02"
+            android:layout_marginTop="24dp"
+            android:alpha="0"/>
+
+        <TextView
+            android:id="@+id/launchSub"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Encrypted mesh over Tor"
+            android:textColor="@color/text_muted"
+            android:textSize="13sp"
+            android:layout_marginTop="6dp"
+            android:alpha="0"/>
+
+    </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/launchSpinner"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="72dp"
+        android:indeterminateTint="@color/accent"
+        android:alpha="0"/>
+
+    <TextView
+        android:id="@+id/versionText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="48dp"
+        android:text="version 0.4.1-beta1"
+        android:textColor="@color/text_hint"
+        android:textSize="10sp"
+        android:letterSpacing="0.1"/>
+
+</FrameLayout>

@@ -1,0 +1,21 @@
+{
+  "allFiles": [
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/meshchat /app/src/main/java/com/bitzlink/AppConfig.kt",
+      "selection": {
+        "end": {
+          "column": 1,
+          "index": 813,
+          "line": 28
+        },
+        "start": {
+          "column": 1,
+          "index": 813,
+          "line": 28
+        }
+      }
+    }
+  ],
+  "projectPath": "/storage/emulated/0/CodeOnTheGoProjects/meshchat ",
+  "selectedFile": "/storage/emulated/0/CodeOnTheGoProjects/meshchat /app/src/main/java/com/bitzlink/AppConfig.kt"
+}
