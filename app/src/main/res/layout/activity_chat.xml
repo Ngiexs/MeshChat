@@ -40,6 +40,7 @@
                 android:paddingStart="6dp"
                 android:paddingEnd="6dp">
 
+<<<<<<< HEAD
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -64,6 +65,18 @@
                         android:maxLines="1"
                         android:ellipsize="end"/>
                 </LinearLayout>
+=======
+                <TextView
+                    android:id="@+id/headerGroup"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="MeshChat"
+                    android:textColor="@color/text"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:maxLines="1"
+                    android:ellipsize="end"/>
+>>>>>>> ac73626a1b48e44cac0eac3a08e705c226446cc4
 
                 <TextView
                     android:id="@+id/typingBar"
@@ -206,6 +219,10 @@
                 android:background="?android:attr/selectableItemBackground"/>
         </LinearLayout>
 
+<<<<<<< HEAD
+=======
+        <!-- Input row: rounded input + circular arrow send button -->
+>>>>>>> ac73626a1b48e44cac0eac3a08e705c226446cc4
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -217,6 +234,7 @@
             android:background="@color/surface"
             android:gravity="bottom">
 
+<<<<<<< HEAD
             <ImageButton
                 android:id="@+id/photoBtn"
                 android:layout_width="44dp"
@@ -229,6 +247,8 @@
                 android:padding="10dp"
                 android:alpha="0.75"/>
 
+=======
+>>>>>>> ac73626a1b48e44cac0eac3a08e705c226446cc4
             <EditText
                 android:id="@+id/msgInput"
                 android:layout_width="0dp"

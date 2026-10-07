@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import java.util.Properties
 import java.io.FileInputStream
 
@@ -24,10 +25,17 @@ val hasValidSigningProps = keystorePropsFile.exists().also { exists ->
 }
 
 
+=======
+plugins {
+    id("com.android.application")
+}
+
+>>>>>>> ac73626a1b48e44cac0eac3a08e705c226446cc4
 android {
     namespace = "com.bitzlink"
     compileSdk = 36
 
+<<<<<<< HEAD
     // disable linter
     lint {
         checkReleaseBuilds = false
@@ -41,11 +49,23 @@ android {
                 keyAlias = keystoreProps["keyAlias"] as String
                 keyPassword = keystoreProps["keyPassword"] as String
             }
+=======
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs")
+>>>>>>> ac73626a1b48e44cac0eac3a08e705c226446cc4
         }
     }
 
     defaultConfig {
         applicationId = "com.bitzlink"
+<<<<<<< HEAD
         minSdk = 24
         targetSdk = 35
         versionCode = 4
@@ -59,10 +79,22 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+=======
+        minSdk = 21
+        targetSdk = 35
+        versionCode = 3
+        versionName = "0.4.1-beta1"
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+>>>>>>> ac73626a1b48e44cac0eac3a08e705c226446cc4
     }
 
     buildTypes {
         release {
+<<<<<<< HEAD
             if (hasValidSigningProps) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -115,10 +147,14 @@ android {
             force("androidx.core:core-ktx:1.8.0")
             force("androidx.lifecycle:lifecycle-runtime-ktx:2.3.1")
             force("androidx.collection:collection-ktx:1.4.2")
+=======
+            isMinifyEnabled = false
+>>>>>>> ac73626a1b48e44cac0eac3a08e705c226446cc4
         }
     }
 }
 
+<<<<<<< HEAD
 tasks.withType<JavaCompile> {
     options.compilerArgs.add("-Xlint:deprecation")
 }
@@ -138,4 +174,10 @@ dependencies {
     implementation(libs.android.material)
     implementation(libs.androidx.startup.runtime)
     implementation(libs.androidx.interpolator)
+=======
+dependencies {
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    implementation("androidx.core:core:1.13.1")
+    // ... any other existing lines ...
+>>>>>>> ac73626a1b48e44cac0eac3a08e705c226446cc4
 }

@@ -16,7 +16,12 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/AppTheme"
+<<<<<<< HEAD
         android:usesCleartextTraffic="true">
+=======
+        android:usesCleartextTraffic="true"
+        android:extractNativeLibs="true">
+>>>>>>> ac73626a1b48e44cac0eac3a08e705c226446cc4
 
         <activity
             android:name=".LaunchActivity"

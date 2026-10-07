@@ -1,0 +1,28 @@
+MeshChat is a peer-to-peer encrypted group chat that runs entirely over Tor. No central server, no account, no phone number.
+
+Every member of a group shares a group name, a passphrase, and a Tor .onion address. Messages are encrypted with AES-256-GCM using a key derived from the passphrase, then routed through the Tor network so no one sees your IP address.
+
+One phone in the group acts as the host, relaying messages between other members. If the host goes offline, a designated backup node takes over automatically within about a minute. The .onion address stays the same, so nobody has to rejoin.
+
+FEATURES
+- End-to-end encrypted group chat
+- No account, no phone number, no email
+- Traffic routed through Tor
+- Automatic failover if the host disconnects
+- Disappearing messages (30s, 5m, 1h, 1d)
+- Reply to specific messages
+- Delivery receipts
+- QR code sharing for joining a group
+- Multiple groups per device
+
+PRIVACY
+Messages are encrypted on your device before they leave it. Tor relay operators can see that encrypted traffic is happening but cannot read message contents or the sender's IP address. No analytics, no advertising, no crash reporting.
+
+WHAT TO EXPECT
+The first time you open the app and join a group, Tor has to build a circuit. This takes 10-20 seconds. After that, reconnects are faster.
+
+WHO THIS IS FOR
+Groups of 2-36 people who want to talk privately without trusting a central service.
+
+WHO THIS IS NOT FOR
+If you need voice messages, file transfers, or message search, those are not built yet.
