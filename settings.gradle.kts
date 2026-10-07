@@ -1,5 +1,4 @@
 pluginManagement {
-<<<<<<< HEAD
   repositories {
     gradlePluginPortal()
     google()
@@ -38,4 +37,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Bitzlink"
 include(":app")
->>>>>>> ac73626a1b48e44cac0eac3a08e705c226446cc4
+
