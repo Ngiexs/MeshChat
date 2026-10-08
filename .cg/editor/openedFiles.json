@@ -20,13 +20,13 @@
       "selection": {
         "end": {
           "column": 1,
-          "index": 23022,
-          "line": 606
+          "index": 23652,
+          "line": 619
         },
         "start": {
           "column": 1,
-          "index": 23022,
-          "line": 606
+          "index": 23652,
+          "line": 619
         }
       }
     },
@@ -49,6 +49,81 @@
       "file": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/ChatActivity.kt",
       "selection": {
         "end": {
+          "column": 50,
+          "index": 34570,
+          "line": 874
+        },
+        "start": {
+          "column": 50,
+          "index": 34570,
+          "line": 874
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/MeshService.kt",
+      "selection": {
+        "end": {
+          "column": 1,
+          "index": 40632,
+          "line": 998
+        },
+        "start": {
+          "column": 1,
+          "index": 40632,
+          "line": 998
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/Replica.kt",
+      "selection": {
+        "end": {
+          "column": 1,
+          "index": 9410,
+          "line": 274
+        },
+        "start": {
+          "column": 1,
+          "index": 9410,
+          "line": 274
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/build.gradle.kts",
+      "selection": {
+        "end": {
+          "column": 22,
+          "index": 2459,
+          "line": 75
+        },
+        "start": {
+          "column": 22,
+          "index": 2459,
+          "line": 75
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/LaunchActivity.kt",
+      "selection": {
+        "end": {
+          "column": 39,
+          "index": 1507,
+          "line": 45
+        },
+        "start": {
+          "column": 39,
+          "index": 1507,
+          "line": 45
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/MainActivity.kt",
+      "selection": {
+        "end": {
           "column": 0,
           "index": 0,
           "line": 0
@@ -59,8 +134,23 @@
           "line": 0
         }
       }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/AppConfig.kt",
+      "selection": {
+        "end": {
+          "column": 20,
+          "index": 20,
+          "line": 0
+        },
+        "start": {
+          "column": 20,
+          "index": 20,
+          "line": 0
+        }
+      }
     }
   ],
   "projectPath": "/storage/emulated/0/CodeOnTheGoProjects/meshchat",
-  "selectedFile": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/ChatActivity.kt"
+  "selectedFile": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/AppConfig.kt"
 }

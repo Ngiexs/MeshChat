@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
@@ -16,9 +17,11 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.MediaStore
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
@@ -44,6 +47,9 @@ import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import com.journeyapps.barcodescanner.BarcodeEncoder
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -152,7 +158,6 @@ class ChatActivity : Activity() {
 
     private var emptyStateView: View? = null
 
-    // Decoded photo cache. Bounded by bytes; evicted on activity destroy.
     private val photoCache = LruCache<String, Bitmap>(PHOTO_CACHE_BYTES)
 
     private val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -455,6 +460,15 @@ class ChatActivity : Activity() {
         if (intent == null) return
         setIntent(intent)
 
+        val newGroup = GroupRegistry(this).getActiveGroup()
+        if (newGroup.isNotEmpty() && newGroup != activeGroup) {
+            activeGroup = newGroup
+            headerGroup.text = activeGroup
+            drawerGroup.text = activeGroup
+            drawerGroupName.text = activeGroup
+            Log.i("MeshTrace", "ChatActivity onNewIntent: activeGroup=$activeGroup")
+        }
+
         val nName = intent.getStringExtra("name")
         val nPeer = intent.getStringExtra("peer")
         val nHost = if (intent.hasExtra("isHost")) intent.getBooleanExtra("isHost", false) else isHost
@@ -512,14 +526,16 @@ class ChatActivity : Activity() {
             } else {
                 "MSG\u0001$name\u0001$ts\u0001$text\u0001$ttl"
             }
-            val sent = sendFromHost(plain, msgId)
+            sendFromHost(plain, msgId)
             addBubble(PeerState.ChatMessage(name ?: "", text, true, ts,
                 replySender, replyBody, expiresAt), msgId)
-            if (sent) markAcked(msgId, "_host")
+            // No local self-ACK. Ticks climb to "✓ 1" only when a peer
+            // actually acknowledges the frame on the wire, so both host
+            // and client show the same progression.
         } else if (svc != null && svc.getNode() != null &&
             svc.getNode()?.isFatalError() == false) {
             val msgId = UUID.randomUUID().toString()
-            svc.getNode()?.sendChat(text, msgId, replySender, replyBody, ttl)
+            svc.getNode()?.sendChat(text, msgId, replySender, replyBody, ttl, ts)
             addBubble(PeerState.ChatMessage(name ?: "", text, true, ts,
                 replySender, replyBody, expiresAt), msgId)
         } else {
@@ -566,14 +582,55 @@ class ChatActivity : Activity() {
                         "Image too large after compression", Toast.LENGTH_SHORT).show() }
                     return@Thread
                 }
-                val b64 = Base64.encodeToString(jpeg, Base64.NO_WRAP)
-                runOnUiThread { sendPhotoBytes(b64, "image/jpeg") }
+                val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                if (bmp == null) {
+                    runOnUiThread { Toast.makeText(this,
+                        "Couldn't decode that image", Toast.LENGTH_SHORT).show() }
+                    return@Thread
+                }
+                runOnUiThread { showPhotoConfirmDialog(bmp, jpeg) }
             } catch (e: Exception) {
                 Log.w("MeshTrace", "photo load failed", e)
                 runOnUiThread { Toast.makeText(this,
                     "Couldn't load that image", Toast.LENGTH_SHORT).show() }
             }
         }, "photo-encode").start()
+    }
+
+    private fun showPhotoConfirmDialog(bmp: Bitmap, jpeg: ByteArray) {
+        if (isFinishing) return
+
+        val wrap = LinearLayout(this)
+        wrap.orientation = LinearLayout.VERTICAL
+        wrap.setPadding(dp(16f), dp(8f), dp(16f), dp(8f))
+
+        val iv = ImageView(this)
+        iv.setImageBitmap(bmp)
+        iv.scaleType = ImageView.ScaleType.FIT_CENTER
+        iv.adjustViewBounds = true
+        val maxW = (resources.displayMetrics.widthPixels * 0.80f).toInt()
+        val maxH = (resources.displayMetrics.heightPixels * 0.55f).toInt()
+        iv.maxWidth = maxW; iv.maxHeight = maxH
+        wrap.addView(iv)
+
+        val info = TextView(this).apply {
+            text = "${bmp.width}×${bmp.height}  ·  ${jpeg.size / 1024} KB"
+            textSize = 12f
+            setTextColor(0xFF8B98A5.toInt())
+            gravity = Gravity.CENTER
+            setPadding(0, dp(10f), 0, 0)
+        }
+        wrap.addView(info)
+
+        AlertDialog.Builder(this)
+            .setTitle("Send photo?")
+            .setView(wrap)
+            .setPositiveButton("Send") { _, _ ->
+                val b64 = Base64.encodeToString(jpeg, Base64.NO_WRAP)
+                sendPhotoBytes(b64, "image/jpeg")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun loadAndCompressPhoto(uri: Uri): ByteArray? {
@@ -636,16 +693,71 @@ class ChatActivity : Activity() {
                 val line = Protocol.pack(Protocol.MSG, msgId, cipher)
                 svc.getServer()?.sendFromHost(line)
                 addBubble(m, msgId)
-                markAcked(msgId, "_host")
+                // No self-ACK — see sendCurrentText for rationale.
             } catch (e: Exception) { handleSendFailed(msgId, e.message) }
         } else if (svc != null && svc.getNode() != null &&
             svc.getNode()?.isFatalError() == false) {
-            svc.getNode()?.sendPhoto(b64, mime, msgId, ttl)
+            svc.getNode()?.sendPhoto(b64, mime, msgId, ttl, ts)
             addBubble(m, msgId)
         } else {
             Toast.makeText(this, "Not connected — photo not sent",
                 Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun saveImageToGallery(m: PeerState.ChatMessage) {
+        val b64 = m.imageB64
+        if (b64.isNullOrEmpty()) return
+        val mime = m.imageMime ?: "image/jpeg"
+
+        Thread({
+            var toast: String
+            try {
+                val bytes = Base64.decode(b64, Base64.NO_WRAP)
+                val filename = "meshchat_${System.currentTimeMillis()}.jpg"
+
+                if (Build.VERSION.SDK_INT >= 29) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                        put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                        put(MediaStore.MediaColumns.RELATIVE_PATH,
+                            "${Environment.DIRECTORY_PICTURES}/MeshChat")
+                    }
+                    val uri = contentResolver.insert(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IOException("MediaStore insert returned null")
+                    contentResolver.openOutputStream(uri).use { out ->
+                        if (out == null) throw IOException("openOutputStream null")
+                        out.write(bytes)
+                        out.flush()
+                    }
+                    toast = "Saved to Pictures/MeshChat"
+                } else {
+                    val dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+                        ?: filesDir
+                    if (!dir.exists()) dir.mkdirs()
+                    val f = File(dir, filename)
+                    FileOutputStream(f).use { out ->
+                        out.write(bytes)
+                        out.flush()
+                    }
+                    toast = "Saved to ${f.absolutePath}"
+                }
+                runOnUiThread {
+                    if (!isFinishing) {
+                        Toast.makeText(this, toast, Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("MeshTrace", "save image failed", e)
+                runOnUiThread {
+                    if (!isFinishing) {
+                        Toast.makeText(this, "Save failed: ${e.message}",
+                            Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }, "save-image").start()
     }
 
     // ── Reactions ────────────────────────────────────────────────────
@@ -950,7 +1062,6 @@ class ChatActivity : Activity() {
     }
 
     private fun sweepReplicaExpiry(replica: Replica, k: SecretKey) {
-        // Skip entirely when TTL is off — nothing can be expired.
         if (currentTtlMs <= 0L) return
 
         val now = System.currentTimeMillis()
@@ -964,7 +1075,10 @@ class ChatActivity : Activity() {
                 if (plain.startsWith("REACT\u0001")) continue
                 val parts = plain.split("\u0001")
                 var ts = 0L; var ttl = 0L
-                if (parts.size >= 7) {
+                if (parts[0] == "PHOTO" && parts.size >= 4) {
+                    ts = parts[2].toLongOrNull() ?: 0L
+                    ttl = parts[3].toLongOrNull() ?: 0L
+                } else if (parts.size >= 7) {
                     ts = parts[2].toLongOrNull() ?: 0L
                     ttl = parts[6].toLongOrNull() ?: 0L
                 } else if (parts.size == 5) {
@@ -1084,8 +1198,6 @@ class ChatActivity : Activity() {
         try {
             val hints = HashMap<EncodeHintType, Any>()
             hints[EncodeHintType.ERROR_CORRECTION] = ErrorCorrectionLevel.M
-            // Quiet zone of 4 modules — required by spec, and 2 causes
-            // marginal scanners to miss the code.
             hints[EncodeHintType.MARGIN] = 4
             bmp = BarcodeEncoder().encodeBitmap(payload,
                 BarcodeFormat.QR_CODE, px, px, hints)
@@ -1105,7 +1217,6 @@ class ChatActivity : Activity() {
         val iv = ImageView(this)
         iv.setImageBitmap(bmp)
         iv.scaleType = ImageView.ScaleType.FIT_CENTER
-        // Render 1:1 with the encoded bitmap so module edges stay sharp.
         wrap.addView(iv, LinearLayout.LayoutParams(px, px))
 
         val cap = TextView(this)
@@ -1178,9 +1289,6 @@ class ChatActivity : Activity() {
 
                 val parts = plain.split("\u0001")
                 val m = when {
-                    // PHOTO: PHOTO|sender|ts|ttl|mime|b64 — 6 fields. Must be
-                    // checked before the generic 6-field MSG-with-reply branch,
-                    // otherwise ttl/mime/base64 get misread as reply metadata.
                     parts[0] == "PHOTO" && parts.size >= 6 -> {
                         val ts = parts[2].toLongOrNull() ?: now
                         val ttl = parts[3].toLongOrNull() ?: 0L
@@ -1224,7 +1332,8 @@ class ChatActivity : Activity() {
 
                 if (m.expiresAt > 0 && now >= m.expiresAt) continue
                 addBubble(m, msgId)
-                if (m.mine && msgId != null) markAcked(msgId, "_host")
+                // Note: no auto-ack on history load. Ticks only reflect
+                // wire-level acknowledgements received during this session.
             } catch (_: Exception) {}
         }
 
@@ -1524,6 +1633,9 @@ class ChatActivity : Activity() {
             tick.setTextColor(COLOR_TICK_FAILED)
             return
         }
+        // Read wins over delivered. "✓✓" is reserved exclusively for the
+        // read state; ack counts use a single ✓ with a numeric suffix so
+        // they can never be confused for the read glyph.
         val readers = readBy[msgId]
         if (!readers.isNullOrEmpty()) {
             tick.text = "✓✓"
@@ -1533,9 +1645,18 @@ class ChatActivity : Activity() {
         val ackers = ackedBy[msgId]
         val n = ackers?.size ?: 0
         when {
-            n == 0 -> { tick.text = "◯"; tick.setTextColor(COLOR_TICK_PENDING) }
-            n == 1 -> { tick.text = "✓ 1"; tick.setTextColor(COLOR_TICK_PARTIAL) }
-            else -> { tick.text = "✓✓ $n"; tick.setTextColor(COLOR_TICK_DELIVERED) }
+            n == 0 -> {
+                tick.text = "◯"
+                tick.setTextColor(COLOR_TICK_PENDING)
+            }
+            n == 1 -> {
+                tick.text = "✓ 1"
+                tick.setTextColor(COLOR_TICK_PARTIAL)
+            }
+            else -> {
+                tick.text = "✓ $n"
+                tick.setTextColor(COLOR_TICK_DELIVERED)
+            }
         }
     }
 
@@ -1666,6 +1787,8 @@ class ChatActivity : Activity() {
             content.addView(quote)
         }
 
+        var collapseToggle: TextView? = null
+
         val bubble: View = if (m.isImage) {
             val iv = ImageView(this)
             val cacheKey = msgId ?: sig
@@ -1679,8 +1802,12 @@ class ChatActivity : Activity() {
             }
             if (bmp != null) iv.setImageBitmap(bmp)
             iv.scaleType = ImageView.ScaleType.FIT_CENTER
-            val maxW = (resources.displayMetrics.widthPixels * 0.72f).toInt()
-            val maxH = (resources.displayMetrics.heightPixels * 0.45f).toInt()
+            val maxW = Math.min(
+                (resources.displayMetrics.widthPixels * 0.72f).toInt(),
+                dp(PHOTO_BUBBLE_MAX_W_DP.toFloat()))
+            val maxH = Math.min(
+                (resources.displayMetrics.heightPixels * 0.45f).toInt(),
+                dp(PHOTO_BUBBLE_MAX_H_DP.toFloat()))
             iv.maxWidth = maxW; iv.maxHeight = maxH
             iv.adjustViewBounds = true
             iv.setPadding(dp(4f), dp(4f), dp(4f), dp(4f))
@@ -1696,6 +1823,27 @@ class ChatActivity : Activity() {
             } else {
                 tv.textSize = 15f
                 tv.setPadding(dp(14f), dp(9f), dp(14f), dp(9f))
+                if (m.body.length > LONG_MSG_THRESHOLD) {
+                    tv.maxLines = LONG_MSG_MAX_LINES
+                    tv.ellipsize = TextUtils.TruncateAt.END
+                    collapseToggle = TextView(this).apply {
+                        text = "Show more"
+                        textSize = 12f
+                        setTextColor(COLOR_ACCENT)
+                        setPadding(dp(8f), dp(2f), dp(8f), dp(4f))
+                        setOnClickListener {
+                            if (tv.maxLines == LONG_MSG_MAX_LINES) {
+                                tv.maxLines = Int.MAX_VALUE
+                                tv.ellipsize = null
+                                text = "Show less"
+                            } else {
+                                tv.maxLines = LONG_MSG_MAX_LINES
+                                tv.ellipsize = TextUtils.TruncateAt.END
+                                text = "Show more"
+                            }
+                        }
+                    }
+                }
             }
             tv.setTextColor(if (isMine) COLOR_MINE_TEXT else COLOR_THEIRS_TEXT)
             tv.background = bubbleDrawable(isMine)
@@ -1703,20 +1851,19 @@ class ChatActivity : Activity() {
             tv
         }
 
-        // Pin the bubble's width so it can't inherit MATCH_PARENT from a
-        // vertical LinearLayout parent. Without this, when the reaction row
-        // flips from GONE to VISIBLE the parent re-measures with an ambiguous
-        // spec and the bubble collapses to the width of the reaction chip,
-        // wrapping text one character per line.
         bubble.layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT)
+
+        bubble.tag = outer
 
         bubble.setOnLongClickListener {
             showBubbleMenu(m, msgId, bubble); true
         }
         attachSwipeToReply(bubble, m)
         content.addView(bubble)
+
+        collapseToggle?.let { content.addView(it) }
 
         val reactRow = LinearLayout(this)
         reactRow.orientation = LinearLayout.HORIZONTAL
@@ -1850,7 +1997,8 @@ class ChatActivity : Activity() {
         pm.menu.add(0, 3, 2, "Copy")
         pm.menu.add(0, 4, 3, "Forward to input")
         if (m.mine && msgId != null) pm.menu.add(0, 5, 4, "Who's seen this")
-        pm.menu.add(0, 6, 5, "Delete for me")
+        if (m.isImage) pm.menu.add(0, 7, 5, "Save image")
+        pm.menu.add(0, 6, 6, "Delete for me")
 
         pm.setOnMenuItemClickListener(object : PopupMenu.OnMenuItemClickListener {
             override fun onMenuItemClick(item: MenuItem?): Boolean {
@@ -1875,6 +2023,7 @@ class ChatActivity : Activity() {
                     }
                     5 -> showSeenBy(msgId)
                     6 -> deleteForMe(m, anchor)
+                    7 -> saveImageToGallery(m)
                 }
                 return true
             }
@@ -1915,16 +2064,24 @@ class ChatActivity : Activity() {
                 val sig = signatureOf(m)
                 SessionStore(this).addDeletedSig(sig)
                 deletedSigs.add(sig)
-                var parent = anchor.parent
-                var hops = 0
-                while (parent != null && hops < 6) {
-                    if (parent === messagesBox) {
-                        messagesBox.removeView(anchor.parent as View)
-                        break
+
+                var container = anchor.tag as? View
+                if (container == null || container.parent !== messagesBox) {
+                    var parent = anchor.parent
+                    var hops = 0
+                    while (parent != null && hops < 6) {
+                        if (parent.parent === messagesBox) {
+                            container = parent as? View
+                            break
+                        }
+                        parent = parent.parent
+                        hops++
                     }
-                    parent = parent.parent
-                    hops++
                 }
+                if (container != null && container.parent === messagesBox) {
+                    messagesBox.removeView(container)
+                }
+
                 reactionRows.remove(sig)
                 reactions.remove(sig)
                 photoCache.remove(sig)
@@ -1983,10 +2140,12 @@ class ChatActivity : Activity() {
         if (searchActive) { closeSearch(); return }
         if (replyTo != null) { clearReply(); return }
         val now = System.currentTimeMillis()
-        if (now - lastBackPress > BACK_HINT_DEBOUNCE_MS) {
+        if (now - lastBackPress > BACK_EXIT_WINDOW_MS) {
             lastBackPress = now
-            Toast.makeText(this, "Use ☰ → Leave group to exit",
+            Toast.makeText(this, "Press back again to exit",
                 Toast.LENGTH_SHORT).show()
+        } else {
+            finishAffinity()
         }
     }
 
@@ -2018,7 +2177,7 @@ class ChatActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        service?.clearChatNotifications()
+        service?.clearChatNotifications(activeGroup)
         isForeground = true
         updateSendBtn()
 
@@ -2081,7 +2240,9 @@ class ChatActivity : Activity() {
                             setStatus(s ?: "")
                         }
                     }
-                    override fun onTyping(who: String) { showTyping(who) }
+                    override fun onTyping(who: String) {
+                        runOnUiThread { showTyping(who) }
+                    }
                     override fun onBackupsChanged(b: List<String>?) {}
                     override fun onRoster(c: Int, mc: Int, b: Int, mb: Int) {
                         runOnUiThread {
@@ -2111,7 +2272,9 @@ class ChatActivity : Activity() {
                     override fun onStatus(s: String?) {
                         runOnUiThread { setStatus(s ?: "") }
                     }
-                    override fun onTyping(who: String) { showTyping(who) }
+                    override fun onTyping(who: String) {
+                        runOnUiThread { showTyping(who) }
+                    }
                     override fun onClearHistory() {
                         lastClearHistoryAt = System.currentTimeMillis()
                         runOnUiThread {
@@ -2218,6 +2381,7 @@ class ChatActivity : Activity() {
     companion object {
         private const val AUTO_SCROLL_THRESHOLD_PX = 120
         private const val BACK_HINT_DEBOUNCE_MS = 2000L
+        private const val BACK_EXIT_WINDOW_MS = 2000L
         private const val REPLAY_NOTIFY_SUPPRESS_MS = 3000L
         private const val EXPIRY_TICK_MS = 3000L
         private const val POLL_FAST_MS = 1000L
@@ -2231,6 +2395,12 @@ class ChatActivity : Activity() {
         private const val PHOTO_MAX_BYTES = 400 * 1024
         private val PHOTO_QUALITIES = intArrayOf(75, 60, 50)
         private const val PHOTO_CACHE_BYTES = 8 * 1024 * 1024
+
+        private const val PHOTO_BUBBLE_MAX_W_DP = 320
+        private const val PHOTO_BUBBLE_MAX_H_DP = 420
+
+        private const val LONG_MSG_THRESHOLD = 600
+        private const val LONG_MSG_MAX_LINES = 12
 
         private const val COLOR_MINE_BUBBLE = 0xFF1F6F5C.toInt()
         private const val COLOR_MINE_TEXT = 0xFFE7E9EA.toInt()

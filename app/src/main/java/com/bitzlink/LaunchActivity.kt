@@ -43,7 +43,7 @@ class LaunchActivity : Activity() {
         val version = findViewById<TextView>(R.id.versionText)
 
         val launches = bumpLaunchCount()
-        version?.text = "Version 0.4.3_hotFix-beta1 ·  Launch #$launches"
+        version?.text = "Version 0.4.4-beta1 ·  Launch #$launches"
 
         val h = Handler(Looper.getMainLooper())
         h.postDelayed({ icon.animate().alpha(1f).setDuration(700).start() },

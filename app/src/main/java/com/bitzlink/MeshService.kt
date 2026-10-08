@@ -25,6 +25,8 @@ import android.os.SystemClock
 import android.util.Log
 import java.util.ArrayDeque
 import java.util.Collections
+import java.util.HashMap
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -61,11 +63,11 @@ class MeshService : Service() {
     @Volatile private var uiNodeListener: MeshNode.Listener? = null
     @Volatile private var uiServerListener: MeshServer.Listener? = null
 
-    // Chat notification coalescing: all incoming messages fold into one
-    // notification keyed by NOTIF_CHAT_ID. Cleared on ChatActivity resume.
-    private val chatNotifLines = ArrayDeque<Pair<String, String>>()
-    private var chatNotifUnread = 0
+    // Chat notification coalescing, keyed by group name so messages from
+    // two different groups land in two separate notifications.
     private val chatNotifLock = Any()
+    private val chatNotifLines = HashMap<String, ArrayDeque<Pair<String, String>>>()
+    private val chatNotifUnread = HashMap<String, Int>()
 
     private val dispatchingNodeListener = object : MeshNode.Listener {
         override fun onMessage(m: PeerState.ChatMessage) { uiNodeListener?.onMessage(m) }
@@ -316,26 +318,54 @@ class MeshService : Service() {
             nm.createNotificationChannel(NotificationChannel(CHAN_SERVICE,
                 "MeshChat Service", NotificationManager.IMPORTANCE_LOW))
 
+            // Legacy channels (used for the "no group" case). Per-group
+            // channels are created lazily by ensureChatChannel().
+            createChatChannel(nm, CHAN_CHAT, "Chat Messages", true)
+            createChatChannel(nm, CHAN_CHAT_SILENT, "Chat Messages (silent)", false)
+        }
+    }
+
+    private fun createChatChannel(nm: NotificationManager, id: String,
+                                  label: String, withSound: Boolean) {
+        if (Build.VERSION.SDK_INT < 26) return
+        if (nm.getNotificationChannel(id) != null) return
+        val ch = NotificationChannel(id, label, NotificationManager.IMPORTANCE_HIGH)
+        ch.enableVibration(true)
+        ch.vibrationPattern = longArrayOf(0, 200, 100, 200)
+        if (withSound) {
             val attrs = AudioAttributes.Builder()
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION)
                 .build()
-
-            val chat = NotificationChannel(CHAN_CHAT, "Chat Messages",
-                NotificationManager.IMPORTANCE_HIGH)
-            chat.enableVibration(true)
-            chat.vibrationPattern = longArrayOf(0, 200, 100, 200)
-            chat.setSound(Uri.parse("android.resource://$packageName/" +
+            ch.setSound(Uri.parse("android.resource://$packageName/" +
                 android.provider.Settings.System.DEFAULT_NOTIFICATION_URI), attrs)
-            nm.createNotificationChannel(chat)
-
-            val silent = NotificationChannel(CHAN_CHAT_SILENT,
-                "Chat Messages (silent)", NotificationManager.IMPORTANCE_LOW)
-            silent.enableVibration(true)
-            silent.vibrationPattern = longArrayOf(0, 200, 100, 200)
-            silent.setSound(null, null)
-            nm.createNotificationChannel(silent)
+        } else {
+            ch.setSound(null, null)
         }
+        nm.createNotificationChannel(ch)
+    }
+
+    /**
+     * Lazily create a per-group notification channel and return its ID.
+     * The ID and label both include the (sanitised) group name so Android
+     * Settings → Notifications lists each group separately.
+     */
+    private fun ensureChatChannel(group: String, sound: Boolean): String {
+        val base = if (sound) CHAN_CHAT else CHAN_CHAT_SILENT
+        val safe = GroupRegistry.sanitize(group).lowercase(Locale.US).take(40)
+        if (safe.isEmpty()) return base
+        val id = "${base}_$safe"
+        if (Build.VERSION.SDK_INT < 26) return id
+        val nm = getSystemService(NotificationManager::class.java) ?: return id
+        val label = if (sound) "Chat · $group" else "Chat · $group (silent)"
+        createChatChannel(nm, id, label, sound)
+        return id
+    }
+
+    private fun notifIdForGroup(group: String): Int {
+        if (group.isEmpty()) return NOTIF_CHAT_ID_LEGACY
+        val h = group.hashCode() and 0x7FFFFFFF
+        return NOTIF_CHAT_ID_BASE + (h % 100000)
     }
 
     private fun buildServiceNotification(): Notification {
@@ -785,34 +815,41 @@ class MeshService : Service() {
     fun getCachedClientCount(): Int = cachedClients
     fun getCachedBackupCount(): Int = cachedBackups
 
+    /**
+     * Incoming chat notification. Coalesces per group: messages from group
+     * A land in one notification, group B in another. Each group gets its
+     * own notification ID and its own channel, so the two never clobber
+     * each other and the user can mute one group without muting the other.
+     */
     fun showChatNotification(sender: String, body: String) {
         try {
             val ss = SessionStore(this)
             if (ss.isMuted() || ss.isQuietNow()) return
 
-            synchronized(chatNotifLock) {
-                chatNotifLines.addLast(sender to body)
-                while (chatNotifLines.size > NOTIF_MAX_LINES)
-                    chatNotifLines.removeFirst()
-                chatNotifUnread++
-            }
+            val group = activeGroup
+            val sound = ss.isSoundEnabled()
+            val channelId = ensureChatChannel(group, sound)
 
             val unread: Int
             val lines: List<Pair<String, String>>
             synchronized(chatNotifLock) {
-                unread = chatNotifUnread
-                lines = chatNotifLines.toList()
+                val q = chatNotifLines.getOrPut(group) { ArrayDeque() }
+                q.addLast(sender to body)
+                while (q.size > NOTIF_MAX_LINES) q.removeFirst()
+                val u = (chatNotifUnread[group] ?: 0) + 1
+                chatNotifUnread[group] = u
+                unread = u
+                lines = q.toList()
             }
 
-            val sound = ss.isSoundEnabled()
             val b = if (Build.VERSION.SDK_INT >= 26)
-                Notification.Builder(this, if (sound) CHAN_CHAT else CHAN_CHAT_SILENT)
+                Notification.Builder(this, channelId)
             else Notification.Builder(this).apply {
                 if (sound) setDefaults(Notification.DEFAULT_ALL)
                 else setDefaults(Notification.DEFAULT_VIBRATE)
             }
 
-            val groupSuffix = if (activeGroup.isNotEmpty()) " · $activeGroup" else ""
+            val groupSuffix = if (group.isNotEmpty()) " · $group" else ""
             val title = if (unread <= 1)
                 "${lines.lastOrNull()?.first ?: sender}$groupSuffix"
             else "$unread new messages$groupSuffix"
@@ -871,18 +908,23 @@ class MeshService : Service() {
             }
 
             val nm = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
-            nm?.notify(NOTIF_CHAT_ID, b.build())
+            nm?.notify(notifIdForGroup(group), b.build())
         } catch (_: Exception) {}
     }
 
-    fun clearChatNotifications() {
+    /**
+     * Clear only the notification belonging to the given group. Called by
+     * ChatActivity.onResume so opening group A's chat doesn't kill group
+     * B's notification.
+     */
+    fun clearChatNotifications(group: String) {
         synchronized(chatNotifLock) {
-            chatNotifLines.clear()
-            chatNotifUnread = 0
+            chatNotifLines.remove(group)
+            chatNotifUnread.remove(group)
         }
         try {
             val nm = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
-            nm?.cancel(NOTIF_CHAT_ID)
+            nm?.cancel(notifIdForGroup(group))
         } catch (_: Exception) {}
     }
 
@@ -932,7 +974,8 @@ class MeshService : Service() {
         private const val CHAN_CHAT = "bitzlink_chat"
         private const val CHAN_CHAT_SILENT = "bitzlink_chat_silent"
         private const val NOTIF_ID = 1
-        private const val NOTIF_CHAT_ID = 2
+        private const val NOTIF_CHAT_ID_LEGACY = 2
+        private const val NOTIF_CHAT_ID_BASE = 100
         private const val NOTIF_MAX_LINES = 6
         private const val ELECTION_RETRY_MS = 2000L
         private const val NET_LOSS_GRACE_MS = 30000L

@@ -1,7 +1,7 @@
 package com.bitzlink
 
 object AppConfig {
-    const val VERSION_LABEL = "0.4.3_hotFix-beta1"
+    const val VERSION_LABEL = "0.4.4-beta1"
     const val DEFAULT_PORT = 8888
     const val SOCKS_PORT = 9050
 

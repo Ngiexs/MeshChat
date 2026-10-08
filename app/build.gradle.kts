@@ -73,9 +73,9 @@ android {
     defaultConfig {
         applicationId = "com.bitzlink"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 4
-        versionName = "0.4.3_hotFix-beta1"
+        versionName = "0.4.4-beta1"
 
         vectorDrawables {
             useSupportLibrary = true

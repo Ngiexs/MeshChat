@@ -22,6 +22,7 @@ class Replica @JvmOverloads constructor(
     // Append-only accounting so we know when to rewrite (compact).
     private var liveRecords = 0
     private var deadRecords = 0
+    private var liveBytes = 0L
 
     init {
         val safe = GroupRegistry.sanitize(groupName)
@@ -48,15 +49,31 @@ class Replica @JvmOverloads constructor(
 
         messages.addLast(wireLine)
         liveRecords++
-        while (messages.size > MAX_MESSAGES) {
-            messages.removeFirst()
-            liveRecords--
-            deadRecords++
-        }
+        liveBytes += bytesOf(wireLine)
+        evictOldest()
         appendLineToDisk(wireLine)
 
         if (shouldCompact()) compact()
     }
+
+    /**
+     * Trim from the head until both the message count and the total live
+     * byte size are within budget. Photos dominate the byte budget, so a
+     * burst of images evicts older text well before the message cap is
+     * reached, which is what we want.
+     */
+    private fun evictOldest() {
+        while (messages.size > MAX_MESSAGES || liveBytes > MAX_BYTES) {
+            val oldest = messages.removeFirst()
+            liveRecords--
+            liveBytes -= bytesOf(oldest)
+            deadRecords++
+        }
+        if (liveBytes < 0) liveBytes = 0L
+    }
+
+    private fun bytesOf(line: String): Long =
+        line.toByteArray(Charsets.UTF_8).size.toLong() + 1L  // +1 for newline
 
     @Synchronized
     fun contains(wireLine: String?): Boolean =
@@ -90,6 +107,7 @@ class Replica @JvmOverloads constructor(
         tombstonedIds.clear()
         liveRecords = 0
         deadRecords = 0
+        liveBytes = 0L
         try {
             if (file.exists()) file.delete()
             if (tmpFile.exists()) tmpFile.delete()
@@ -107,11 +125,15 @@ class Replica @JvmOverloads constructor(
         var changed = false
         val it = messages.iterator()
         while (it.hasNext()) {
-            val p = Protocol.unpack(it.next())
+            val line = it.next()
+            val p = Protocol.unpack(line)
             if (p.size >= 3 && p[0] == Protocol.MSG && msgId == p[1]) {
-                it.remove(); changed = true; liveRecords--
+                it.remove(); changed = true
+                liveRecords--
+                liveBytes -= bytesOf(line)
             }
         }
+        if (liveBytes < 0) liveBytes = 0L
         if (changed) {
             appendLineToDisk(TOMBSTONE_PREFIX + msgId)
             deadRecords++
@@ -163,11 +185,8 @@ class Replica @JvmOverloads constructor(
                 }
                 messages.addLast(line)
                 liveRecords++
-                while (messages.size > MAX_MESSAGES) {
-                    messages.removeFirst()
-                    liveRecords--
-                    deadRecords++
-                }
+                liveBytes += bytesOf(line)
+                evictOldest()
             }
 
             if (shouldCompact()) compact()
@@ -239,6 +258,10 @@ class Replica @JvmOverloads constructor(
         private const val COMPACT_MIN_RECORDS = 200
         private const val COMPACT_HEADROOM = 200
         private const val COMPACT_DEAD_RATIO = 0.5
+
+        // 50 MB of live payload. Photos are the dominant contributor, so
+        // this caps history at roughly 95 photos or 1000 text messages.
+        private const val MAX_BYTES = 50L * 1024L * 1024L
 
         private val KNOWN_TYPES = setOf(
             Protocol.MSG, Protocol.HELLO, Protocol.ACK, Protocol.READ,

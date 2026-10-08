@@ -473,13 +473,20 @@ class MeshNode(
     fun getBackupRank(): Int = backupRank
     fun isFatalError(): Boolean = fatalError
 
+    /**
+     * Send a chat message. tsMs should be the timestamp the caller used for
+     * its own local bubble, so the sender's copy and the copy every peer
+     * sees share the same `${sender}|${ts}` signature. Reactions target
+     * that signature, so a mismatch here silently detaches reactions from
+     * the bubble they were meant for.
+     */
     @JvmOverloads
     fun sendChat(text: String, msgId: String?,
                  replySender: String? = null, replyBody: String? = null,
-                 ttlMs: Long = 0L) {
+                 ttlMs: Long = 0L, tsMs: Long = 0L) {
         sendExecutor.execute {
             try {
-                val ts = System.currentTimeMillis()
+                val ts = if (tsMs > 0) tsMs else System.currentTimeMillis()
                 val safeBody = text.replace('\u0001', ' ')
                 val safeReplyBody = replyBody?.replace('\u0001', ' ') ?: ""
                 val plain = if (replySender != null) {
@@ -518,10 +525,16 @@ class MeshNode(
         }
     }
 
-    fun sendPhoto(b64: String?, mime: String?, msgId: String, ttlMs: Long) {
+    /**
+     * Send a photo. Same tsMs contract as sendChat — pass the timestamp
+     * used for the local bubble so signatures match across devices.
+     */
+    @JvmOverloads
+    fun sendPhoto(b64: String?, mime: String?, msgId: String, ttlMs: Long,
+                  tsMs: Long = 0L) {
         sendExecutor.execute {
             try {
-                val ts = System.currentTimeMillis()
+                val ts = if (tsMs > 0) tsMs else System.currentTimeMillis()
                 val plain = "PHOTO\u0001$myName\u0001$ts\u0001$ttlMs\u0001" +
                     "${mime ?: "image/jpeg"}\u0001${b64 ?: ""}"
                 val k = keyHolder.get()
