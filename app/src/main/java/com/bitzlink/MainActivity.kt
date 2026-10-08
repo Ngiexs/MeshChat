@@ -426,7 +426,9 @@ class MainActivity : Activity() {
 
         // Case 2: MESHCHAT2 credential string.
         try {
-            val parts = payload.split("|".toRegex()).toTypedArray()
+            // Literal split. "|".toRegex() would be regex alternation and
+            // split into individual characters, breaking the prefix check.
+            val parts = payload.split("|").toTypedArray()
             Log.i("MeshTrace", "Payload parts=${parts.size} first=${parts.getOrNull(0) ?: "?"}")
 
             if (parts.size < 3 || QR_PREFIX != parts[0]) {

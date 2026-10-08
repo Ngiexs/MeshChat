@@ -8,10 +8,20 @@ class GroupRegistry(ctx: Context) {
     private val prefs: SharedPreferences =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    init {
+        // One-time migration: old format used "," which broke any group name
+        // that itself contained a comma. New format uses \u0001.
+        val raw = prefs.getString(KEY_LIST, "") ?: ""
+        if (raw.isNotEmpty() && raw.contains(",") && !raw.contains("\u0001")) {
+            val migrated = raw.split(",").filter { it.isNotEmpty() }
+            prefs.edit().putString(KEY_LIST, migrated.joinToString("\u0001")).apply()
+        }
+    }
+
     fun getGroupNames(): List<String> {
         val raw = prefs.getString(KEY_LIST, "") ?: ""
         if (raw.isEmpty()) return emptyList()
-        return raw.split(",").filter { it.isNotEmpty() }
+        return raw.split("\u0001").filter { it.isNotEmpty() }
     }
 
     fun addGroup(name: String?) {
@@ -31,7 +41,7 @@ class GroupRegistry(ctx: Context) {
     }
 
     private fun saveList(groups: List<String>) {
-        prefs.edit().putString(KEY_LIST, groups.joinToString(",")).apply()
+        prefs.edit().putString(KEY_LIST, groups.joinToString("\u0001")).apply()
     }
 
     fun getActiveGroup(): String = prefs.getString(KEY_ACTIVE, "") ?: ""

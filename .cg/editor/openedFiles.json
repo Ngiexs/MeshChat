@@ -1,0 +1,66 @@
+{
+  "allFiles": [
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/Protocal.kt",
+      "selection": {
+        "end": {
+          "column": 1,
+          "index": 1278,
+          "line": 38
+        },
+        "start": {
+          "column": 1,
+          "index": 1278,
+          "line": 38
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/MeshNode.kt",
+      "selection": {
+        "end": {
+          "column": 1,
+          "index": 23022,
+          "line": 606
+        },
+        "start": {
+          "column": 1,
+          "index": 23022,
+          "line": 606
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/MeshServer.kt",
+      "selection": {
+        "end": {
+          "column": 1,
+          "index": 22983,
+          "line": 473
+        },
+        "start": {
+          "column": 1,
+          "index": 22983,
+          "line": 473
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/ChatActivity.kt",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    }
+  ],
+  "projectPath": "/storage/emulated/0/CodeOnTheGoProjects/meshchat",
+  "selectedFile": "/storage/emulated/0/CodeOnTheGoProjects/meshchat/app/src/main/java/com/bitzlink/ChatActivity.kt"
+}

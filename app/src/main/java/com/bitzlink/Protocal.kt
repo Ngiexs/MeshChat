@@ -32,5 +32,8 @@ object Protocol {
 
     @JvmStatic
     fun unpack(line: String): Array<String> =
-        line.split(Regex(SEP), -1).toTypedArray()
+        // Java's String.split(regex, -1) accepts -1 and preserves trailing
+        // empty fields. Kotlin's Regex.split(input, limit) requires limit >= 0
+        // and throws IllegalArgumentException on -1. Use the Java API directly.
+        java.util.regex.Pattern.compile(SEP).split(line, -1)
 }

@@ -30,6 +30,7 @@ class MeshServer(
         fun onNames(names: List<String>?)
         fun onAck(msgId: String, acker: String)
         fun onRead(msgId: String, reader: String)
+        fun onReaction(sender: String, targetSig: String, emoji: String)
     }
 
     private val pool = Executors.newCachedThreadPool()
@@ -39,6 +40,7 @@ class MeshServer(
     private val backups = ConcurrentHashMap<String, String>()
     private val msgSenders = ConcurrentHashMap<String, String>()
     private val lastTypingAt = ConcurrentHashMap<String, Long>()
+    private val lastHeardFrom = ConcurrentHashMap<String, Long>()
     private val running = AtomicBoolean(true)
     private var serverSocket: ServerSocket? = null
 
@@ -46,6 +48,9 @@ class MeshServer(
         pool.submit { acceptLoop() }
         scheduler.scheduleAtFixedRate({ rebroadcastCandidates() },
             CANDIDATE_REBROADCAST_MS, CANDIDATE_REBROADCAST_MS,
+            TimeUnit.MILLISECONDS)
+        scheduler.scheduleAtFixedRate({ sweepStaleClients() },
+            CLIENT_SWEEP_MS, CLIENT_SWEEP_MS,
             TimeUnit.MILLISECONDS)
     }
 
@@ -59,6 +64,7 @@ class MeshServer(
         backups.clear()
         msgSenders.clear()
         lastTypingAt.clear()
+        lastHeardFrom.clear()
         pool.shutdownNow()
         scheduler.shutdownNow()
     }
@@ -90,6 +96,10 @@ class MeshServer(
 
             var line = input.readLine()
             while (running.get() && line != null) {
+                val now = System.currentTimeMillis()
+                val seenName = clientName
+                if (seenName != null) lastHeardFrom[seenName] = now
+
                 try {
                     val p = Protocol.unpack(line)
                     if (p.isEmpty()) { line = input.readLine(); continue }
@@ -199,44 +209,66 @@ class MeshServer(
                                     try {
                                         val plain = CryptoUtils.decrypt(cipher, k)
                                         val parts = plain.split("\u0001")
-                                        val cm: PeerState.ChatMessage? = when {
-                                            parts.size >= 7 -> {
-                                                val ts = parts[2].toLongOrNull()
-                                                    ?: System.currentTimeMillis()
-                                                val ttl = parts[6].toLongOrNull() ?: 0L
-                                                val exp = if (ttl > 0) ts + ttl else 0L
-                                                val rs = parts[3].ifEmpty { null }
-                                                val rb = parts[4].ifEmpty { null }
-                                                PeerState.ChatMessage(parts[1], parts[5],
-                                                    false, ts, rs, rb, exp)
+
+                                        // REACT|sender|targetSig|emoji — a reaction
+                                        // event, not a chat message. Route it through
+                                        // onReaction so the UI attaches it to the
+                                        // target bubble.
+                                        if (parts.isNotEmpty() &&
+                                            parts[0] == "REACT" && parts.size >= 4) {
+                                            listener?.onReaction(parts[1], parts[2], parts[3])
+                                        } else {
+                                            val cm: PeerState.ChatMessage? = when {
+                                                // PHOTO: PHOTO|sender|ts|ttl|mime|b64 — 6
+                                                // fields. Must be checked before the
+                                                // generic 6-field MSG-with-reply branch.
+                                                parts[0] == "PHOTO" && parts.size >= 6 -> {
+                                                    val ts = parts[2].toLongOrNull()
+                                                        ?: System.currentTimeMillis()
+                                                    val ttl = parts[3].toLongOrNull() ?: 0L
+                                                    val exp = if (ttl > 0) ts + ttl else 0L
+                                                    PeerState.ChatMessage(parts[1], "[photo]",
+                                                        false, ts, null, null, exp,
+                                                        parts[5], parts[4])
+                                                }
+                                                parts.size >= 7 -> {
+                                                    val ts = parts[2].toLongOrNull()
+                                                        ?: System.currentTimeMillis()
+                                                    val ttl = parts[6].toLongOrNull() ?: 0L
+                                                    val exp = if (ttl > 0) ts + ttl else 0L
+                                                    val rs = parts[3].ifEmpty { null }
+                                                    val rb = parts[4].ifEmpty { null }
+                                                    PeerState.ChatMessage(parts[1], parts[5],
+                                                        false, ts, rs, rb, exp)
+                                                }
+                                                parts.size == 6 -> {
+                                                    val ts = parts[2].toLongOrNull()
+                                                        ?: System.currentTimeMillis()
+                                                    val rs = parts[3].ifEmpty { null }
+                                                    val rb = parts[4].ifEmpty { null }
+                                                    PeerState.ChatMessage(parts[1], parts[5],
+                                                        false, ts, rs, rb, 0L)
+                                                }
+                                                parts.size == 5 -> {
+                                                    val ts = parts[2].toLongOrNull()
+                                                        ?: System.currentTimeMillis()
+                                                    val ttl = parts[4].toLongOrNull() ?: 0L
+                                                    val exp = if (ttl > 0) ts + ttl else 0L
+                                                    PeerState.ChatMessage(parts[1], parts[3],
+                                                        false, ts, null, null, exp)
+                                                }
+                                                parts.size >= 4 -> {
+                                                    val ts = parts[2].toLongOrNull()
+                                                        ?: System.currentTimeMillis()
+                                                    PeerState.ChatMessage(parts[1], parts[3],
+                                                        false, ts)
+                                                }
+                                                parts.size >= 3 ->
+                                                    PeerState.ChatMessage(parts[1], parts[2], false)
+                                                else -> null
                                             }
-                                            parts.size == 6 -> {
-                                                val ts = parts[2].toLongOrNull()
-                                                    ?: System.currentTimeMillis()
-                                                val rs = parts[3].ifEmpty { null }
-                                                val rb = parts[4].ifEmpty { null }
-                                                PeerState.ChatMessage(parts[1], parts[5],
-                                                    false, ts, rs, rb, 0L)
-                                            }
-                                            parts.size == 5 -> {
-                                                val ts = parts[2].toLongOrNull()
-                                                    ?: System.currentTimeMillis()
-                                                val ttl = parts[4].toLongOrNull() ?: 0L
-                                                val exp = if (ttl > 0) ts + ttl else 0L
-                                                PeerState.ChatMessage(parts[1], parts[3],
-                                                    false, ts, null, null, exp)
-                                            }
-                                            parts.size >= 4 -> {
-                                                val ts = parts[2].toLongOrNull()
-                                                    ?: System.currentTimeMillis()
-                                                PeerState.ChatMessage(parts[1], parts[3],
-                                                    false, ts)
-                                            }
-                                            parts.size >= 3 ->
-                                                PeerState.ChatMessage(parts[1], parts[2], false)
-                                            else -> null
+                                            if (cm != null) listener?.onMessage(cm)
                                         }
-                                        if (cm != null) listener?.onMessage(cm)
                                     } catch (_: Exception) {}
                                 }
                             }
@@ -274,12 +306,12 @@ class MeshServer(
                             }
                         }
                         Protocol.TYPING -> {
-                            val now = System.currentTimeMillis()
+                            val nowT = System.currentTimeMillis()
                             val prev = lastTypingAt[clientName]
-                            if (prev != null && now - prev < TYPING_MIN_INTERVAL_MS) {
+                            if (prev != null && nowT - prev < TYPING_MIN_INTERVAL_MS) {
                                 line = input.readLine(); continue
                             }
-                            lastTypingAt[clientName ?: ""] = now
+                            lastTypingAt[clientName ?: ""] = nowT
                             broadcastExcept(clientName, line)
                             if (p.size >= 2 && p[1].isNotEmpty()) {
                                 listener?.onTyping(p[1])
@@ -300,15 +332,13 @@ class MeshServer(
         } catch (e: Exception) {
             Log.w(TRACE, "MeshServer client session ended")
         } finally {
-            // Only tear down our own registration. If a client with the same
-            // display name reconnected on a fresh socket, clients[name] now
-            // points at the new writer, and we must leave it alone.
             val writer = myWriter
             if (accepted && clientName != null && writer != null) {
                 if (clients[clientName] === writer) {
                     clients.remove(clientName)
                     val wasBackup = backups.remove(clientName) != null
                     lastTypingAt.remove(clientName)
+                    lastHeardFrom.remove(clientName)
                     val it = msgSenders.entries.iterator()
                     while (it.hasNext()) {
                         if (it.next().value == clientName) it.remove()
@@ -321,6 +351,29 @@ class MeshServer(
             }
             try { s.close() } catch (_: Exception) {}
         }
+    }
+
+    private fun sweepStaleClients() {
+        if (!running.get()) return
+        val now = System.currentTimeMillis()
+        val toDrop = ArrayList<String>()
+        for (name in clients.keys) {
+            val last = lastHeardFrom[name] ?: now
+            if (now - last > CLIENT_IDLE_MS) toDrop.add(name)
+        }
+        if (toDrop.isEmpty()) return
+        for (name in toDrop) {
+            val w = clients.remove(name) ?: continue
+            try { w.close() } catch (_: Exception) {}
+            backups.remove(name)
+            lastTypingAt.remove(name)
+            lastHeardFrom.remove(name)
+            val it = msgSenders.entries.iterator()
+            while (it.hasNext()) if (it.next().value == name) it.remove()
+            listener?.onStatus("$name timed out (no heartbeat)")
+            Log.i(TRACE, "MeshServer: dropped stale client $name")
+        }
+        broadcastRoster()
     }
 
     private fun trimMsgSenders() {
@@ -373,11 +426,6 @@ class MeshServer(
         }
     }
 
-    /**
-     * Host-authored message. Register the msgId so incoming ACK/READ frames
-     * route back to the host UI instead of falling through the client-relay
-     * path.
-     */
     fun sendFromHost(wireLine: String) {
         val p = Protocol.unpack(wireLine)
         if (p.size >= 3 && p[0] == Protocol.MSG) {
@@ -418,6 +466,8 @@ class MeshServer(
         const val MAX_BACKUPS = 5
         private const val SENDER_HOST = "_host"
         private const val CANDIDATE_REBROADCAST_MS = 15000L
+        private const val CLIENT_SWEEP_MS = 30_000L
+        private const val CLIENT_IDLE_MS = 90_000L
         private const val MSGID_MAP_CAP = 500
         private const val TYPING_MIN_INTERVAL_MS = 500L
     }

@@ -23,10 +23,10 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
+import java.util.ArrayDeque
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
 
 class MeshService : Service() {
 
@@ -61,6 +61,12 @@ class MeshService : Service() {
     @Volatile private var uiNodeListener: MeshNode.Listener? = null
     @Volatile private var uiServerListener: MeshServer.Listener? = null
 
+    // Chat notification coalescing: all incoming messages fold into one
+    // notification keyed by NOTIF_CHAT_ID. Cleared on ChatActivity resume.
+    private val chatNotifLines = ArrayDeque<Pair<String, String>>()
+    private var chatNotifUnread = 0
+    private val chatNotifLock = Any()
+
     private val dispatchingNodeListener = object : MeshNode.Listener {
         override fun onMessage(m: PeerState.ChatMessage) { uiNodeListener?.onMessage(m) }
         override fun onStatus(s: String?) { uiNodeListener?.onStatus(s) }
@@ -72,6 +78,9 @@ class MeshService : Service() {
         override fun onNames(names: List<String>?) { uiNodeListener?.onNames(names) }
         override fun onAck(msgId: String, acker: String) { uiNodeListener?.onAck(msgId, acker) }
         override fun onRead(msgId: String, reader: String) { uiNodeListener?.onRead(msgId, reader) }
+        override fun onReaction(sender: String, targetSig: String, emoji: String) {
+            uiNodeListener?.onReaction(sender, targetSig, emoji)
+        }
         override fun onClearHistory() { uiNodeListener?.onClearHistory() }
         override fun onSendFailed(msgId: String?, reason: String?) {
             uiNodeListener?.onSendFailed(msgId, reason)
@@ -90,6 +99,9 @@ class MeshService : Service() {
         override fun onNames(names: List<String>?) { uiServerListener?.onNames(names) }
         override fun onAck(msgId: String, acker: String) { uiServerListener?.onAck(msgId, acker) }
         override fun onRead(msgId: String, reader: String) { uiServerListener?.onRead(msgId, reader) }
+        override fun onReaction(sender: String, targetSig: String, emoji: String) {
+            uiServerListener?.onReaction(sender, targetSig, emoji)
+        }
     }
 
     @Volatile private var cachedOnion: String? = null
@@ -104,6 +116,7 @@ class MeshService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private val netHandler = Handler(Looper.getMainLooper())
+    private val torRestartHandler = Handler(Looper.getMainLooper())
 
     private val wakeLockRefresher = object : Runnable {
         override fun run() {
@@ -485,8 +498,16 @@ class MeshService : Service() {
                 flushPendingReply()
             }
             override fun onError(err: String?) {
+                val wasLive = server != null
                 synchronized(this@MeshService) {
-                    startingServer = false; amHost = false
+                    startingServer = false
+                }
+                if (wasLive) {
+                    try { server?.stop() } catch (_: Exception) {}
+                    server = null
+                    amHost = false
+                    updateWakeLock()
+                    scheduleRecoveryFromTorDeath(wasHost = true)
                 }
                 dispatchingServerListener.onStatus("Tor error: $err")
             }
@@ -569,13 +590,45 @@ class MeshService : Service() {
                 flushPendingReply()
             }
             override fun onError(err: String?) {
+                val wasLive = node != null
                 synchronized(this@MeshService) { startingClient = false }
+                if (wasLive) {
+                    try { node?.stop() } catch (_: Exception) {}
+                    node = null
+                    heartbeat?.clear(); heartbeat = null
+                    scheduleRecoveryFromTorDeath(wasHost = false)
+                }
                 dispatchingNodeListener.onStatus("Tor error: $err")
             }
             override fun onProgress(percent: Int) {
                 dispatchingNodeListener.onStatus("Bootstrapping Tor $percent%")
             }
         }, activeGroup)
+    }
+
+    /**
+     * Tor died unexpectedly (native crash, OOM kill, etc). Schedule a
+     * restart after a short delay. Only one restart is ever pending — a
+     * new call replaces the old.
+     */
+    private fun scheduleRecoveryFromTorDeath(wasHost: Boolean) {
+        torRestartHandler.removeCallbacksAndMessages(null)
+        torRestartHandler.postDelayed({
+            val kh = keyHolder ?: return@postDelayed
+            if (kh.hasKey() != true) return@postDelayed
+            val name = myName ?: return@postDelayed
+            if (wasHost) {
+                if (amHost || server != null) return@postDelayed
+                Log.i(TRACE, "MeshService: recovering host after Tor death")
+                startAsServer(name, kh, AppConfig.DEFAULT_PORT, uiServerListener)
+            } else {
+                if (node != null) return@postDelayed
+                val peer = currentPeer ?: return@postDelayed
+                Log.i(TRACE, "MeshService: recovering client after Tor death")
+                startAsClient(name, kh, peer, AppConfig.DEFAULT_PORT,
+                    uiNodeListener, isBackup)
+            }
+        }, TOR_RESTART_DELAY_MS)
     }
 
     private fun beginElection(oldHost: String, port: Int) {
@@ -622,14 +675,14 @@ class MeshService : Service() {
             dispatchingNodeListener.onStatus(
                 "I'm the new host — starting Tor (up to 30s)…")
             electing = false
-            electionGen++          // invalidate any queued retry
+            electionGen++
             promoteToHost(oldHost, port)
             return
         }
 
         dispatchingNodeListener.onStatus("$winner is the new host — reconnecting…")
         electing = false
-        electionGen++              // invalidate any queued retry
+        electionGen++
         retryConnectToHost(oldHost, port)
     }
 
@@ -683,6 +736,9 @@ class MeshService : Service() {
                             dispatchingNodeListener.onAck(msgId, acker)
                         override fun onRead(msgId: String, reader: String) =
                             dispatchingNodeListener.onRead(msgId, reader)
+                        override fun onReaction(sender: String, targetSig: String,
+                                                emoji: String) =
+                            dispatchingNodeListener.onReaction(sender, targetSig, emoji)
                     }, replica!!)
                 server = srv
                 srv.start()
@@ -734,6 +790,20 @@ class MeshService : Service() {
             val ss = SessionStore(this)
             if (ss.isMuted() || ss.isQuietNow()) return
 
+            synchronized(chatNotifLock) {
+                chatNotifLines.addLast(sender to body)
+                while (chatNotifLines.size > NOTIF_MAX_LINES)
+                    chatNotifLines.removeFirst()
+                chatNotifUnread++
+            }
+
+            val unread: Int
+            val lines: List<Pair<String, String>>
+            synchronized(chatNotifLock) {
+                unread = chatNotifUnread
+                lines = chatNotifLines.toList()
+            }
+
             val sound = ss.isSoundEnabled()
             val b = if (Build.VERSION.SDK_INT >= 26)
                 Notification.Builder(this, if (sound) CHAN_CHAT else CHAN_CHAT_SILENT)
@@ -742,9 +812,18 @@ class MeshService : Service() {
                 else setDefaults(Notification.DEFAULT_VIBRATE)
             }
 
-            var title = sender
-            if (activeGroup.isNotEmpty()) title = "$sender · $activeGroup"
-            b.setContentTitle(title).setContentText(body)
+            val groupSuffix = if (activeGroup.isNotEmpty()) " · $activeGroup" else ""
+            val title = if (unread <= 1)
+                "${lines.lastOrNull()?.first ?: sender}$groupSuffix"
+            else "$unread new messages$groupSuffix"
+
+            val style = Notification.InboxStyle().setBigContentTitle(title)
+            for ((s, bd) in lines) style.addLine("$s: $bd")
+            if (unread > lines.size) style.setSummaryText("+${unread - lines.size} more")
+
+            b.setContentTitle(title)
+                .setContentText(lines.lastOrNull()?.second ?: body)
+                .setStyle(style)
                 .setSmallIcon(android.R.drawable.stat_notify_chat)
                 .setAutoCancel(true)
 
@@ -792,13 +871,25 @@ class MeshService : Service() {
             }
 
             val nm = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
-            nm?.notify(nextNotificationId(), b.build())
+            nm?.notify(NOTIF_CHAT_ID, b.build())
+        } catch (_: Exception) {}
+    }
+
+    fun clearChatNotifications() {
+        synchronized(chatNotifLock) {
+            chatNotifLines.clear()
+            chatNotifUnread = 0
+        }
+        try {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
+            nm?.cancel(NOTIF_CHAT_ID)
         } catch (_: Exception) {}
     }
 
     @Synchronized
     fun stopAll() {
-        electionGen++              // invalidate any queued election retry
+        electionGen++
+        torRestartHandler.removeCallbacksAndMessages(null)
         try { server?.stop() } catch (_: Exception) {}; server = null
         try { node?.stop() } catch (_: Exception) {}; node = null
         heartbeat?.clear(); heartbeat = null
@@ -827,6 +918,7 @@ class MeshService : Service() {
     override fun onDestroy() {
         stopAll()
         stopNetworkMonitor()
+        torRestartHandler.removeCallbacksAndMessages(null)
         handler.removeCallbacksAndMessages(null)
         tor?.stop(); tor = null
         try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
@@ -840,9 +932,12 @@ class MeshService : Service() {
         private const val CHAN_CHAT = "bitzlink_chat"
         private const val CHAN_CHAT_SILENT = "bitzlink_chat_silent"
         private const val NOTIF_ID = 1
+        private const val NOTIF_CHAT_ID = 2
+        private const val NOTIF_MAX_LINES = 6
         private const val ELECTION_RETRY_MS = 2000L
         private const val NET_LOSS_GRACE_MS = 30000L
         private const val RECONNECT_DELAY_MS = 3000L
+        private const val TOR_RESTART_DELAY_MS = 3000L
         private const val SERVICE_HEARTBEAT_MS = 10000L
         private const val SERVICE_ONION_TICK_MS = 5000L
         private const val WAKE_LOCK_TIMEOUT_MS = 45_000L
@@ -851,12 +946,6 @@ class MeshService : Service() {
         const val ACTION_SEND_TEXT = "com.bitzlink.ACTION_SEND_TEXT"
         const val EXTRA_TEXT = "text"
         const val STATUS_HOST_ALREADY_LIVE = "HOST_ALREADY_LIVE"
-
-        // Monotonic notification id. Wraps every ~2 billion notifications.
-        private val notifIdSeq = AtomicInteger(1000)
-
-        private fun nextNotificationId(): Int =
-            notifIdSeq.incrementAndGet() and 0x7FFFFFFF
 
         private fun shortOnion(o: String?): String {
             if (o.isNullOrEmpty()) return "—"

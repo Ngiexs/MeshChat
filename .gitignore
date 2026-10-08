@@ -50,14 +50,8 @@ captures/
 
 # Keystore files
 # Uncomment the following lines if you do not want to check your keystore files in.
-<<<<<<< HEAD
 #*.jks
 #*.keystore
-=======
-*.jks
-*.keystore
-keystore.properties
->>>>>>> ac73626a1b48e44cac0eac3a08e705c226446cc4
 
 # External native build folder generated in Android Studio 2.2 and later
 .externalNativeBuild
@@ -87,9 +81,3 @@ lint/generated/
 lint/outputs/
 lint/tmp/
 # lint/reports/
-<<<<<<< HEAD
-=======
-
-# androidide
-.androidide
->>>>>>> ac73626a1b48e44cac0eac3a08e705c226446cc4

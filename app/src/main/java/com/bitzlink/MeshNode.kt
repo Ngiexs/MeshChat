@@ -3,11 +3,13 @@ package com.bitzlink
 import android.content.Context
 import android.util.Log
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStreamReader
 import java.io.PrintWriter
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -36,6 +38,7 @@ class MeshNode(
         fun onNames(names: List<String>?)
         fun onAck(msgId: String, acker: String)
         fun onRead(msgId: String, reader: String)
+        fun onReaction(sender: String, targetSig: String, emoji: String)
         fun onClearHistory()
         fun onSendFailed(msgId: String?, reason: String?)
     }
@@ -49,11 +52,12 @@ class MeshNode(
     @Volatile private var backupRank = -1
     private var keepaliveThread: Thread? = null
 
-    // Single-threaded writer for lightweight outbound frames (PING, READ,
-    // TYPING, ACK). Prevents a thread-per-ping during bootstrap and
-    // serializes writes on the wire.
     private val writeExecutor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "mesh-node-write").apply { isDaemon = true }
+    }
+
+    private val sendExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "mesh-node-send").apply { isDaemon = true }
     }
 
     private val pending = OutboundQueue()
@@ -78,17 +82,21 @@ class MeshNode(
 
     private fun connectWithRetries() {
         var round = 0
+        var backoff = BACKOFF_MIN_MS
+        var handshakeFailures = 0
+
         while (running && !fatalError) {
             round++
             listener?.onStatus("Connecting to ${shortHost(host)} (round $round)")
-            Log.i(TRACE, "MeshNode: round $round target=$host:$port")
+            Log.i(TRACE, "MeshNode: round $round target=$host:$port backoff=${backoff}ms")
 
             val winner = raceConnections()
             if (winner == null) {
                 if (!running || fatalError) return
-                listener?.onStatus("Retry in ${BACKOFF_MS}ms…")
-                try { Thread.sleep(BACKOFF_MS) }
+                listener?.onStatus("Retry in ${backoff / 1000}s…")
+                try { Thread.sleep(backoff) }
                 catch (_: InterruptedException) { return }
+                backoff = (backoff * 2).coerceAtMost(BACKOFF_MAX_MS)
                 continue
             }
 
@@ -108,17 +116,77 @@ class MeshNode(
 
                 resendPendingAcks()
 
+                listener?.onStatus("Handshaking with host…")
+                val firstLine = awaitFirstLine(winner)
+
+                if (firstLine == null) {
+                    handshakeFailures++
+                    Log.w(TRACE, "MeshNode: handshake timeout (failure #$handshakeFailures)")
+                    if (handshakeFailures >= HANDSHAKE_FAILURE_LIMIT) {
+                        listener?.onStatus(
+                            "Can't reach host. Check that the host device is " +
+                            "online and Tor has finished bootstrapping there.")
+                    }
+                    closeSocket()
+                    if (!running || fatalError) return
+                    backoff = (backoff * 2).coerceAtMost(BACKOFF_MAX_MS)
+                    listener?.onStatus("Retry in ${backoff / 1000}s…")
+                    try { Thread.sleep(backoff) }
+                    catch (_: InterruptedException) { return }
+                    continue
+                }
+
+                handshakeFailures = 0
+                backoff = BACKOFF_MIN_MS
+
+                heartbeat?.setCurrentHost(host)
+                heartbeat?.recordSeen(host)
+
                 listener?.onStatus("Connected")
-                Log.i(TRACE, "MeshNode: socket connected round $round")
+                Log.i(TRACE, "MeshNode: handshake OK first=${firstLine.take(60)}")
+
+                handle(firstLine)
+                if (fatalError) return
 
                 startKeepalive()
-                readLoop()
+                continueReadLoop(winner)
             } catch (e: Exception) {
                 Log.w(TRACE, "MeshNode post-connect: ${e.message}")
             }
             closeSocket()
             if (!running || fatalError) return
             listener?.onStatus("Reconnecting…")
+        }
+    }
+
+    private fun awaitFirstLine(s: Socket): String? {
+        val reader = BufferedReader(InputStreamReader(s.getInputStream()))
+        try {
+            s.soTimeout = HANDSHAKE_TIMEOUT_MS
+        } catch (e: Exception) {
+            Log.w(TRACE, "MeshNode: could not set handshake timeout: ${e.message}")
+        }
+        return try {
+            reader.readLine()
+        } catch (e: SocketTimeoutException) {
+            null
+        } finally {
+            try { s.soTimeout = 0 } catch (_: Exception) {}
+        }
+    }
+
+    private fun continueReadLoop(s: Socket) {
+        try {
+            val reader = BufferedReader(InputStreamReader(s.getInputStream()))
+            var line = reader.readLine()
+            while (running && line != null) {
+                heartbeat?.recordSeen(host)
+                handle(line)
+                if (fatalError) return
+                line = reader.readLine()
+            }
+        } catch (e: Exception) {
+            Log.w(TRACE, "MeshNode readLoop ended: ${e.message}")
         }
     }
 
@@ -189,22 +257,6 @@ class MeshNode(
             pool.shutdownNow()
         }
         return winner
-    }
-
-    private fun readLoop() {
-        try {
-            val s = socket ?: return
-            val reader = BufferedReader(InputStreamReader(s.getInputStream()))
-            var line = reader.readLine()
-            while (running && line != null) {
-                heartbeat?.recordSeen(host)
-                handle(line)
-                if (fatalError) return
-                line = reader.readLine()
-            }
-        } catch (e: Exception) {
-            Log.w(TRACE, "MeshNode readLoop ended: ${e.message}")
-        }
     }
 
     private fun startKeepalive() {
@@ -352,7 +404,27 @@ class MeshNode(
 
     private fun parsePlainAndDispatch(plain: String) {
         val parts = plain.split("\u0001")
+
+        // REACT|sender|targetSig|emoji — a reaction event, not a chat
+        // message. Must be routed through onReaction so the UI attaches
+        // it to the target bubble. Falling through to the generic size
+        // branches below would render the emoji as a standalone bubble.
+        if (parts.isNotEmpty() && parts[0] == "REACT" && parts.size >= 4) {
+            listener?.onReaction(parts[1], parts[2], parts[3])
+            return
+        }
+
         val cm: PeerState.ChatMessage? = when {
+            // PHOTO: PHOTO|sender|ts|ttl|mime|b64 — 6 fields. Must be checked
+            // before the generic 6-field MSG-with-reply branch, otherwise the
+            // ttl/mime/base64 get misread as reply metadata and body.
+            parts[0] == "PHOTO" && parts.size >= 6 -> {
+                val ts = parts[2].toLongOrNull() ?: System.currentTimeMillis()
+                val ttl = parts[3].toLongOrNull() ?: 0L
+                val exp = if (ttl > 0) ts + ttl else 0L
+                PeerState.ChatMessage(parts[1], "[photo]", myName == parts[1],
+                    ts, null, null, exp, parts[5], parts[4])
+            }
             parts.size >= 7 -> {
                 val ts = parts[2].toLongOrNull() ?: System.currentTimeMillis()
                 val ttl = parts[6].toLongOrNull() ?: 0L
@@ -405,7 +477,7 @@ class MeshNode(
     fun sendChat(text: String, msgId: String?,
                  replySender: String? = null, replyBody: String? = null,
                  ttlMs: Long = 0L) {
-        Thread {
+        sendExecutor.execute {
             try {
                 val ts = System.currentTimeMillis()
                 val safeBody = text.replace('\u0001', ' ')
@@ -420,7 +492,7 @@ class MeshNode(
                 if (k == null) {
                     Log.w(TRACE, "MeshNode: cannot send, no key yet")
                     notifySendFailed(msgId, "No group key yet")
-                    return@Thread
+                    return@execute
                 }
                 val cipher = CryptoUtils.encrypt(plain, k)
                 val line = if (msgId != null)
@@ -432,7 +504,7 @@ class MeshNode(
                 val w = out
                 if (w == null) {
                     pending.enqueue(line)
-                    return@Thread
+                    return@execute
                 }
                 try { w.println(line); w.flush() }
                 catch (e: Exception) {
@@ -443,11 +515,11 @@ class MeshNode(
                 Log.e(TRACE, "MeshNode send failed", e)
                 notifySendFailed(msgId, e.message)
             }
-        }.start()
+        }
     }
 
     fun sendPhoto(b64: String?, mime: String?, msgId: String, ttlMs: Long) {
-        Thread {
+        sendExecutor.execute {
             try {
                 val ts = System.currentTimeMillis()
                 val plain = "PHOTO\u0001$myName\u0001$ts\u0001$ttlMs\u0001" +
@@ -455,7 +527,7 @@ class MeshNode(
                 val k = keyHolder.get()
                 if (k == null) {
                     notifySendFailed(msgId, "No group key yet")
-                    return@Thread
+                    return@execute
                 }
                 val cipher = CryptoUtils.encrypt(plain, k)
                 val line = Protocol.pack(Protocol.MSG, msgId, cipher)
@@ -463,7 +535,7 @@ class MeshNode(
                 pendingAcks[msgId] = line
 
                 val w = out
-                if (w == null) { pending.enqueue(line); return@Thread }
+                if (w == null) { pending.enqueue(line); return@execute }
                 try {
                     w.println(line)
                     w.flush()
@@ -473,25 +545,25 @@ class MeshNode(
             } catch (e: Exception) {
                 notifySendFailed(msgId, e.message)
             }
-        }.start()
+        }
     }
 
     fun sendReaction(targetSig: String?, emoji: String?, msgId: String) {
-        Thread {
+        sendExecutor.execute {
             try {
                 val safeSig = targetSig?.replace('\u0001', ' ') ?: ""
                 val plain = "REACT\u0001$myName\u0001$safeSig\u0001${emoji ?: "👍"}"
-                val k = keyHolder.get() ?: return@Thread
+                val k = keyHolder.get() ?: return@execute
                 val cipher = CryptoUtils.encrypt(plain, k)
                 val line = Protocol.pack(Protocol.MSG, msgId, cipher)
                 replica.append(line)
                 pendingAcks[msgId] = line
 
                 val w = out
-                if (w == null) { pending.enqueue(line); return@Thread }
+                if (w == null) { pending.enqueue(line); return@execute }
                 try { w.println(line); w.flush() } catch (_: Exception) {}
             } catch (_: Exception) {}
-        }.start()
+        }
     }
 
     private fun notifySendFailed(msgId: String?, reason: String?) {
@@ -514,6 +586,7 @@ class MeshNode(
         pending.clear()
         closeSocket()
         try { writeExecutor.shutdownNow() } catch (_: Exception) {}
+        try { sendExecutor.shutdownNow() } catch (_: Exception) {}
     }
 
     private fun closeSocket() {
@@ -526,6 +599,9 @@ class MeshNode(
         private const val TRACE = "MeshTrace"
         private const val ATTEMPTS_PER_ROUND = 6
         private const val ATTEMPT_TIMEOUT_MS = 6000
-        private const val BACKOFF_MS = 500L
+        private const val BACKOFF_MIN_MS = 500L
+        private const val BACKOFF_MAX_MS = 15_000L
+        private const val HANDSHAKE_TIMEOUT_MS = 25_000
+        private const val HANDSHAKE_FAILURE_LIMIT = 3
     }
 }

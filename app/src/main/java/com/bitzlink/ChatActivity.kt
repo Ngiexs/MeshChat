@@ -950,12 +950,7 @@ class ChatActivity : Activity() {
     }
 
     private fun sweepReplicaExpiry(replica: Replica, k: SecretKey) {
-        // If disappearing messages are off for this session, and no prior
-        // session ever enabled them, there's nothing to sweep. Detecting
-        // the "prior session" case would need per-message bookkeeping we
-        // don't store, so we accept the corner case: if TTL was toggled
-        // on then off, already-expired messages linger until the next
-        // time TTL is enabled or the replica is cleared.
+        // Skip entirely when TTL is off — nothing can be expired.
         if (currentTtlMs <= 0L) return
 
         val now = System.currentTimeMillis()
@@ -1083,13 +1078,17 @@ class ChatActivity : Activity() {
             Base64.NO_WRAP or Base64.URL_SAFE)
         val payload = "MESHCHAT2|$b64g|$b64p|$b64o|$secret|$pub"
 
+        val px = (300 * resources.displayMetrics.density).toInt()
+
         val bmp: Bitmap
         try {
             val hints = HashMap<EncodeHintType, Any>()
             hints[EncodeHintType.ERROR_CORRECTION] = ErrorCorrectionLevel.M
-            hints[EncodeHintType.MARGIN] = 2
+            // Quiet zone of 4 modules — required by spec, and 2 causes
+            // marginal scanners to miss the code.
+            hints[EncodeHintType.MARGIN] = 4
             bmp = BarcodeEncoder().encodeBitmap(payload,
-                BarcodeFormat.QR_CODE, 1200, 1200, hints)
+                BarcodeFormat.QR_CODE, px, px, hints)
         } catch (e: Exception) {
             Log.e("MeshTrace", "QR generation failed", e)
             Toast.makeText(this, "Couldn't generate QR: ${e.message}",
@@ -1106,7 +1105,7 @@ class ChatActivity : Activity() {
         val iv = ImageView(this)
         iv.setImageBitmap(bmp)
         iv.scaleType = ImageView.ScaleType.FIT_CENTER
-        val px = (300 * resources.displayMetrics.density).toInt()
+        // Render 1:1 with the encoded bitmap so module edges stay sharp.
         wrap.addView(iv, LinearLayout.LayoutParams(px, px))
 
         val cap = TextView(this)
@@ -1179,6 +1178,17 @@ class ChatActivity : Activity() {
 
                 val parts = plain.split("\u0001")
                 val m = when {
+                    // PHOTO: PHOTO|sender|ts|ttl|mime|b64 — 6 fields. Must be
+                    // checked before the generic 6-field MSG-with-reply branch,
+                    // otherwise ttl/mime/base64 get misread as reply metadata.
+                    parts[0] == "PHOTO" && parts.size >= 6 -> {
+                        val ts = parts[2].toLongOrNull() ?: now
+                        val ttl = parts[3].toLongOrNull() ?: 0L
+                        val exp = if (ttl > 0) ts + ttl else 0L
+                        PeerState.ChatMessage(parts[1], "[photo]",
+                            name == parts[1], ts, null, null, exp,
+                            parts[5], parts[4])
+                    }
                     parts.size >= 7 -> {
                         val ts = parts[2].toLongOrNull() ?: now
                         val ttl = parts[6].toLongOrNull() ?: 0L
@@ -1693,6 +1703,11 @@ class ChatActivity : Activity() {
             tv
         }
 
+        // Pin the bubble's width so it can't inherit MATCH_PARENT from a
+        // vertical LinearLayout parent. Without this, when the reaction row
+        // flips from GONE to VISIBLE the parent re-measures with an ambiguous
+        // spec and the bubble collapses to the width of the reaction chip,
+        // wrapping text one character per line.
         bubble.layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT)
@@ -2003,6 +2018,7 @@ class ChatActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        service?.clearChatNotifications()
         isForeground = true
         updateSendBtn()
 
@@ -2080,6 +2096,10 @@ class ChatActivity : Activity() {
                     override fun onRead(msgId: String, reader: String) {
                         runOnUiThread { markRead(msgId, reader) }
                     }
+                    override fun onReaction(sender: String, targetSig: String,
+                                            emoji: String) {
+                        runOnUiThread { applyReaction(sender, targetSig, emoji) }
+                    }
                 })
         } else {
             svc.startAsClient(name ?: "", kh, peer, AppConfig.DEFAULT_PORT,
@@ -2120,6 +2140,10 @@ class ChatActivity : Activity() {
                     }
                     override fun onRead(msgId: String, reader: String) {
                         runOnUiThread { markRead(msgId, reader) }
+                    }
+                    override fun onReaction(sender: String, targetSig: String,
+                                            emoji: String) {
+                        runOnUiThread { applyReaction(sender, targetSig, emoji) }
                     }
                     override fun onSendFailed(msgId: String?, reason: String?) {
                         runOnUiThread { handleSendFailed(msgId, reason) }

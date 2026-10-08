@@ -343,6 +343,7 @@ class TorManager private constructor(private val ctx: Context) {
 
     private fun runTor(safeGroup: String, publishHiddenService: Boolean,
                        myGen: Long) {
+        var unexpectedExit = false
         try {
             val filesDir = ctx.filesDir
             val torDataDir = File(filesDir, "tor_data")
@@ -452,7 +453,12 @@ class TorManager private constructor(private val ctx: Context) {
                     line = reader.readLine()
                 }
             }
+            // Read loop returned normally. If we weren't told to stop, Tor
+            // died on its own — OOM kill, native crash, disk full, etc.
             Log.i(TRACE, "TorManager: tor process exited")
+            synchronized(lock) {
+                if (generation.get() == myGen && running) unexpectedExit = true
+            }
         } catch (e: Exception) {
             if (generation.get() == myGen) {
                 Log.e(TRACE, "TorManager failed: ${e.message}", e)
@@ -466,6 +472,10 @@ class TorManager private constructor(private val ctx: Context) {
                     torProcess = null
                 }
             }
+        }
+        if (unexpectedExit) {
+            Log.w(TRACE, "TorManager: tor died unexpectedly, notifying listeners")
+            fail("Tor process exited unexpectedly", myGen)
         }
     }
 
