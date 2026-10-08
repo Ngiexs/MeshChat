@@ -24,3 +24,7 @@ This project can be built using AndroidIDE or Android Studio with Gradle.
 1. Clone the repository:
    ```bash
    git clone https://github.com/Ngiexs/MeshChat.git
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a detailed history of changes.
